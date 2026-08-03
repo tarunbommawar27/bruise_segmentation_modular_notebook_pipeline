@@ -30,6 +30,7 @@ it and how to *change* it.
 15. [Traps we hit, and the guards against them](#15-traps-we-hit-and-the-guards-against-them)
 16. [Build and regeneration](#16-build-and-regeneration)
 17. [File map](#17-file-map)
+18. [Planned next work — for discussion, not yet implemented](#18-planned-next-work--for-discussion-not-yet-implemented)
 
 ---
 
@@ -1870,7 +1871,7 @@ if ALL:
 ''')
 ```
 
-Add `"MYTABLE"` to the `WANTED` list and `FILENAME` map in the D9 save cell.
+Add `"MYTABLE"` to the `WANTED` list and `FILENAME` map in the D10 save cell.
 
 **Rules that keep the analysis honest:**
 
@@ -2259,6 +2260,243 @@ WORK_DIR/
 **`WORK_DIR` is where every Stage E and Stage F result you produce lives.** If it
 is not on persistent storage, the runs die with the session and the next one
 retrains from scratch.
+
+---
+
+## 18. Planned next work — for discussion, not yet implemented
+
+Nothing in this section is built. It exists so the four items below are written
+down in one place before the next meeting, in the same form as §14: what is
+being proposed, what already exists that it would reuse, and what has to be
+decided before anyone spends GPU time. **No code has been written for any of
+it. Do not read a family name here as a registry entry** — none of these are in
+`FAMILY_SPEC`, `TEACHER_FOR` or `STAGE_H_FAMILIES`, and §14's warning about
+unregistered arms being invisible to the registry applies to all of them.
+
+### 18.1 Item 1 — inference for the three models — **IMPLEMENTED 2026-08-03**
+
+**Status: built, smoke-tested on CPU, no GPU numbers yet.** Everything below the
+status block is the original scope; it is kept because it is also the spec.
+
+`bruisekit/inference.py` (source of truth `scripts/unified_lib/inference.py`,
+shipped by `copy_authored_modules` in `scripts/60_build_unified_bundle.py`).
+
+**The notebook is the primary entry point** — §D9, driven by two §0 flags, so the
+block stays where every other stage lives rather than becoming a script you have
+to remember exists:
+
+```python
+RUN_INFERENCE_BLOCK = True      # False by default: D9 costs nothing and says so
+INFERENCE_MODELS    = None      # None = the three SegFormers; any registry family works
+```
+
+`NEED_CACHE` picks the flag up, so the 640 cache builds itself. The cell is four
+lines — config, one call into `bruisekit`, two `display`s — which is the same
+contract as every other cell in the notebook.
+
+The CLI is the same code for a headless node:
+
+```bash
+python -m bruisekit.inference                                   # the three SegFormers
+python -m bruisekit.inference --models fastscnn --no-inference  # speed only, any family
+```
+
+| API | What it does |
+|---|---|
+| `DEFAULT_MODELS` | the SegFormer trio — see the resolved open question below |
+| `resolve_runs(env, reg, models, seed=None)` | family → `Run` at the val-selected best seed via `report.best_seeds`; non-WEIGHTS families are printed and skipped, never back-filled |
+| `inference_pass(...)` | delegates to `loaders.score_run` + `report.normalize`. **No second inference implementation exists in this file** |
+| `speed_table(...)` | delegates to `evaluate.benchmark_speed` on CUDA; `_benchmark_cpu` / `_benchmark_yolo_cuda` otherwise |
+| `reconcile(...)` | fresh vs shipped per-image, per model |
+| `check_single_machine(df)` | raises if a table mixes `device_name`. Called before any write |
+
+Written to `env.out/inference/`: `per_image_<family>.csv`,
+`inference_headline.csv`, `inference_reconciliation.csv`, and
+`benchmark_640_{cuda,cpu}.csv` — device-tagged in the filename so a CPU
+smoke-test cannot silently overwrite the table it is not comparable to.
+
+Schema is `results/final/benchmark_640.csv`'s nine columns plus `kind`, `run_id`,
+`device`, `device_name`, `repeats`, `warmup`, `seed`. Those last six were the
+context you needed to interpret the shipped five rows and were not written down.
+
+**What the smoke test showed.** All three re-inferred on CPU, against tables
+produced on an A100:
+
+| model (seed 0) | fresh | shipped | Δ mean | max per-image Δ | Δ misses |
+|---|---|---|---|---|---|
+| `segformer_b2_teacher` | 0.769247 | 0.769240 | +7e-6 | 2.5e-3 | 0 |
+| `segformer_b0_distilled` | 0.767989 | 0.768011 | −2.2e-5 | 7.6e-3 | 0 |
+| `segformer_b0_direct` | 0.766278 | 0.766318 | −4.0e-5 | 6.8e-3 | 0 |
+
+Every mean agrees to better than 2e-4 and no complete-miss count moves. That
+reproduces this bundle's README agreement table exactly, from a different code
+path, which is the point of `reconcile`. Roughly 2 minutes per SegFormer on CPU.
+
+**What is still owed:** a GPU run. Nothing here has produced a publishable
+timing, because this machine has no CUDA device and a CPU row is not a speed
+result. The four constraints below are enforced in code but only a GPU run
+exercises them.
+
+**Resolved open question — *which* three models.** `DEFAULT_MODELS` is the
+SegFormer trio (`segformer_b2_teacher`, `segformer_b0_direct`,
+`segformer_b0_distilled`): the analysis notebook's own `SEGFORMER_MODELS` dict
+and the exact three rows of `track_a_evaluation/track_a_comparison.csv`.
+`--models` takes any registry family, so the mobile and gated arms — which have
+no published timings at all — need no new code, only GPU time.
+
+---
+
+**The ask.** Reproduce what `bruise_colab_final_analysis.ipynb` does for
+inference, for the three models.
+
+**What "inference" means there.** Two different things live under that word in
+that notebook, and the plan needs both named separately:
+
+| | What it is | Where it happens today |
+|---|---|---|
+| (a) the **inference pass** | one best-seed forward over the 185-image test set → per-image rows | `bruise_colab_final_analysis.ipynb` §6 "Which seed, and one inference pass"; `evaluate_at_cut` (`bruisekit/evaluate.py:13`), `yolo_native.predict_native_argmax` (`bruisekit/yolo_native.py:117`) |
+| (b) the **speed benchmark** | median/p95 ms and FPS at 640 | **not computed in the analysis notebook** — §F3 only *reads* `results/final/benchmark_640.csv`. It is produced by `benchmark_speed` (`bruisekit/evaluate.py:110`), called from `bruise_colab_final.ipynb` |
+
+Most of the value of "calculate inference" is (b), because (a) is already
+cached for the headline models. Do not let the two be conflated in the meeting.
+
+**Reuse, do not rewrite.** `bruisekit/loaders.py:266 score_run` already
+dispatches over `segformer` / `smp` / `efficient` / `yolo` and returns the
+per-image frame; `bruisekit/evaluate.py:110 benchmark_speed` already returns
+`{median_ms, mean_ms, p95_ms, fps, n_timed}`. The work is a driver cell plus a
+CSV, not new inference code.
+
+**Open question, settled above — *which* three models.** There were two
+defensible readings and they produce different work:
+
+- the **SegFormer trio** — `segformer_b2_teacher`, `segformer_b0_direct`,
+  `segformer_b0_distilled`. This is the notebook's own `SEGFORMER_MODELS` dict
+  and the exact 3 rows of `track_a_evaluation/track_a_comparison.csv`
+  (`raw_fwd_fps`, `mask_out_fps`, `e2e_fps`). If this is the ask, the numbers
+  largely already exist and the job is to re-derive them on one machine.
+- **three of the newer mobile/gated arms**, which have no published timings at
+  all. `FINAL_RESULT/benchmark_stage_e.csv` covers four Stage E models, and
+  nothing covers the `_rgkd` / `_b2kd` arms.
+
+**Constraints that must carry into whatever is produced.** These are not
+optional caveats, they are the reason the existing table is trustworthy:
+
+1. **Timings from different machines are not comparable.** Stage A's numbers are
+   full-A100; Stage E's are an A100 MIG 3g.40gb slice (§7.3). A new table must
+   be single-machine, or it is not a table.
+2. **SegFormer rows time forward + threshold; YOLO rows time raw forward only**
+   (`path == "yolo_native_raw_forward"`). Keep the `path` column.
+3. **`cuda.synchronize()` on both sides**, and disk read / decode / resize / H2D
+   / D2H stay out of the timed region (`bruisekit/evaluate.py:110-122`).
+4. **YOLO is `/255`, never ImageNet norm** — the memoised trap; ImageNet norm
+   silently caps YOLO at 0.479 Dice. Native-argmax is the sole reporting path.
+
+### 18.2 Item 2 — multi-teacher reliability-gated distillation
+
+**The ask.** Extend Stage H from one teacher to two — SegFormer-B2 **and a large
+YOLO** — into the four smaller students, and run both a per-pixel and a
+per-image variant of the gate (`reliability gated group` vs plain
+`reliability gated`).
+
+This is three separable pieces of work. They are listed in dependency order and
+should be costed separately, because piece (b) is small and pieces (a) and (c)
+are not.
+
+**(a) A YOLO *teacher*. This does not exist and is the largest unknown.**
+YOLO appears in this repo only as a **student** (`YoloSemNet`,
+`bruisekit/models.py:73`). There is no large YOLO checkpoint, no teacher
+wrapper, no calibration, and no `FAMILY_SPEC` teacher row. Before this is
+scoped, decide: which YOLO variant/size, trained on what, and by whom. It also
+reintroduces the Ultralytics dependency that §14 gap 2b deliberately removed
+from the sweep — that trade gets re-opened, and it should be re-opened
+knowingly.
+
+**(b) Teacher fusion — this already exists, in the wrong stage.**
+`bruisekit/kd/kd_core.py:366 fuse_teachers` takes exactly two teachers and
+supports `uniform` (mean) and `adaptive` (confidence-weighted, tempered by a
+scalar `rel_b`). `bruisekit/kd/val_oracle.py` derives `rel_b` from the
+validation split and gates whether the adaptive arm is allowed to run at all —
+it returned `rel_b = 0.6343` for B2-vs-B5 (§6.2). **Reuse both.** The catch is
+that they live in `bruisekit/kd/`, a vendored standalone CLI package that
+`reliability_kd.py` does not import; the two KD systems share no code today.
+Bridging them, or lifting `fuse_teachers` into `reliability_kd`, is the real
+task. Note also that `fuse_teachers` is GT-free by construction while the
+reliability gate `r` uses GT — combining them needs a stated ordering
+(fuse-then-gate vs gate-each-then-fuse), and those are different methods.
+
+**Non-negotiable:** if the teacher set changes, `val_oracle.py` is re-run before
+any arm is scheduled (§12). A multi-teacher arm whose fusion weight was fitted
+for a different teacher pair is not interpretable.
+
+**(c) Per-pixel vs per-image as separable variants. Not expressible today.**
+The gate is currently one thing: `w = g * r` at
+`bruisekit/reliability_kd.py:516`, hard-multiplied, with only `gate_lo` /
+`gate_hi` exposed. `g` can be neutered by abusing the ramp; **there is no way at
+all to turn `r` off**, so a pixel-off / image-on ablation cannot be run. Making
+the two independently switchable is new plumbing in
+`ReliabilityGatedDistillLoss` (`reliability_kd.py:440-548`) and a new config
+key, and it is the prerequisite for the whole "group vs normal" comparison. The
+per-branch diagnostics already exist (`_sum_reliability` vs `_sum_gate`,
+`:471-501`) and should be reported per variant so a null can be distinguished
+from a gate that never fired.
+
+**Scale, for the cost conversation.** 2 teacher configurations × 2 gate variants
+× 4 students × 3 seeds = **48 runs**. At the `COST_HOURS` rates for the existing
+gated arms (0.8–1.0 h) that is **roughly 40–48 GPU-hours**, before the controls
+that any new contrast needs and before the YOLO teacher's own training. Stage H
+as it stands is 27 runs. This roughly triples it.
+
+**And the multiplicity problem is the real cost.** §8b.1 and §7c.8 exist because
+an all-pairs sweep at this scale manufactures significance from noise; the
+current design survives review by having **three** pre-registered confirmatory
+contrasts and Holm-correcting over them. A 48-run grid needs its confirmatory
+list written down **before the runs**, not after. Given the headline omnibus does
+not reject (Friedman p = 0.61) and every arm sits inside the annotation-ceiling
+band, the honest prior is that most of these 48 runs will land INCONCLUSIVE on
+Dice. **Decide in advance what the primary endpoint is** — complete-miss
+containment and the fairness gap have shown more separation than mean Dice, and
+picking that after seeing the Dice results is the one thing that would sink it.
+
+### 18.3 Item 3 — teacher → white-light student distillation
+
+**Flagged as under-specified: this cannot be scoped until it is defined.**
+
+A full search of the repo — code, docs, notebooks, manifests, CSVs — for
+`white light` / `ALS` / `alternate light` / `modality` / `multispectral` /
+`wavelength` and the rest returns **one substantive hit**: §1's sentence saying
+the dataset *is* white-light photographs. The manifests carry
+`stem, subject, ita_group_index_5, skin_tone_category, ITA, split, image_path,
+mask_path` — no illumination or modality column. Every image in the dataset is
+already white light. So "teacher → white-light student" has no referent yet.
+
+The most likely intent is **cross-modal**: a teacher trained on alternate-light
+(ALS) or otherwise non-white-light bruise imagery distilled into a student that
+runs on ordinary white-light phone photographs. If that is the intent, say so
+explicitly, and note that it starts from zero on the data side:
+
+- new imagery in the second modality, with masks;
+- a **modality column** in the manifest schema, and split logic that becomes
+  subject × modality grouped — the current subject-grouped guarantee does not
+  prevent the same subject appearing in both modalities across splits, which
+  would leak invisibly and inflate every number (§2, §15);
+- a decision on whether teacher and student see *paired* images of the same
+  bruise or merely the same distribution. Paired is a different and much
+  stronger method than unpaired; they should not be discussed as one thing.
+
+**Nothing else in §18 depends on this**, so it should not block items 1 and 2.
+
+### 18.4 The four questions to answer in the meeting
+
+1. ~~Which three models does item 1 mean?~~ **Settled**: the SegFormer trio is
+   the default and `--models` takes any registry family. What is left is
+   scheduling the **GPU** run — the code is built and CPU-verified, but no
+   publishable timing exists yet. (§18.1)
+2. **Where does the large YOLO teacher come from**, and are we accepting
+   Ultralytics back into the sweep? (§18.2a)
+3. **What is the pre-registered primary endpoint** for the 48-run grid, and how
+   many confirmatory contrasts? Written down before the runs. (§18.2)
+4. **What does "white light" mean here** — what is the other modality, and does
+   the data exist? (§18.3)
 
 ---
 

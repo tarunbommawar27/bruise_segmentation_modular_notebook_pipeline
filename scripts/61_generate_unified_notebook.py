@@ -134,6 +134,27 @@ EFFICIENT_SEEDS = (0, 1, 2)
 # read GATE_H, not the Dice table, if you do.
 RGKD_SEEDS = None
 
+# ── the inference block (D9) ─────────────────────────────────────────────────
+# False: D9 prints what it would do and costs nothing. True: run one test-set
+#        inference pass AND time the models at 640, writing both to the work dir.
+#
+# Separate from RECOMPUTE_FROM_WEIGHTS on purpose. That flag re-derives the
+# tables the notebook already reports, for the models it already reports. This
+# one answers a different question -- "what does an arbitrary set of models score
+# and how fast is it?" -- and is the only path that produces a SPEED table at all.
+# D8 reads a benchmark CSV; nothing in this notebook ever wrote one.
+RUN_INFERENCE_BLOCK = False
+
+# Which models D9 covers. None = the three SegFormers (inference.DEFAULT_MODELS):
+# the analysis notebook's own SEGFORMER_MODELS dict and the exact three rows of
+# track_a_comparison.csv. Any registry family name works, so the four mobile
+# baselines and the Stage F/H arms -- none of which have ever been timed -- need
+# no new code, only GPU time:
+#   INFERENCE_MODELS = ["fastscnn", "lraspp_mobilenetv3",
+#                       "topformer_tiny", "ppmobileseg_tiny"]
+# A family with no checkpoint on this host prints SKIP and is left out.
+INFERENCE_MODELS = None
+
 # ── recipe (identical to the recipe the shipped checkpoints were trained with) ─
 CFG = dict(
     img_size        = 640,
@@ -443,7 +464,7 @@ Skipped entirely unless something actually needs to run inference.
 """)
 
 code(r'''
-NEED_CACHE = ALLOW_TRAINING or RECOMPUTE_FROM_WEIGHTS
+NEED_CACHE = ALLOW_TRAINING or RECOMPUTE_FROM_WEIGHTS or RUN_INFERENCE_BLOCK
 if NEED_CACHE:
     t0 = time.time()
     MAN640 = L.build_cache640(env, MAN)
@@ -1857,6 +1878,60 @@ else:
     print("benchmark_640.csv not found")
 ''')
 
+# ── D9 the inference block ───────────────────────────────────────────────────
+md(r"""
+## D9 · The inference block — run it, don't read it
+
+D8 **reads** `benchmark_640.csv`. Nothing in this notebook ever **wrote** one:
+the five shipped rows were produced once, elsewhere, and no model added since —
+not the four mobile baselines, not a single Stage F or Stage H arm — has a timing
+at all.
+
+This cell is the missing half. It runs both things the word "inference" covers,
+which are not the same thing and are reported separately:
+
+- **the inference pass** — one forward over the 185 test images at each model's
+  val-selected best seed, at the operating point the run already carries. Exact
+  on CPU. Reconciled against the shipped table, so a fresh number that disagrees
+  says so instead of quietly replacing one.
+- **the speed benchmark** — median/mean/p95 ms and FPS at 640, on the published
+  recipe: 3 repeats, 10 warmup, seed 0, per-image batches, double
+  `cuda.synchronize()`, images staged through this same 640 cache.
+
+Set `RUN_INFERENCE_BLOCK = True` in §0. `INFERENCE_MODELS` takes any registry
+family, so timing the mobile and gated arms needs no new code.
+
+**Three things it will not let you do.** A speed table that mixes devices raises
+rather than writes — the shipped Stage A rows are full-A100 and the Stage E rows
+are an A100 MIG slice, so those two are *already* not one table. A YOLO row is
+labelled `yolo_native_raw_forward` and a SegFormer row `segformer`, because the
+first times a forward and the second times a forward plus a threshold. And a CPU
+run is tagged `device == "cpu"`, timed over a 16-image subset, and written to a
+differently-named file, so it can never be mistaken for a publishable number.
+""")
+
+code(r'''
+if RUN_INFERENCE_BLOCK:
+    from bruisekit import inference as INF
+
+    _models = tuple(INFERENCE_MODELS) if INFERENCE_MODELS else INF.DEFAULT_MODELS
+    INFER = INF.run(env, reg, CFG, MAN, MAN640, _models)
+
+    # The reconciliation is the one to read first. A large max_abs_dice_delta
+    # beside a tiny mean_dice_delta is the signature of a SEED MISMATCH, not of
+    # float noise -- the best seed is 0 for the three SegFormers and for
+    # yolo_sem_distilled but 2 for yolo_sem_direct, and pairing a model's weights
+    # with the wrong seed's table shows per-image gaps up to 0.49 Dice.
+    if "reconcile" in INFER:
+        display(INFER["reconcile"].round(6))
+    if "speed" in INFER and len(INFER["speed"]):
+        display(INFER["speed"].round(3))
+else:
+    print("D9 skipped -- set RUN_INFERENCE_BLOCK = True in section 0 to run it.")
+    print("     inference pass: a couple of minutes on a GPU, ~2 min per SegFormer on CPU")
+    print("     speed table:    seconds, but ONLY meaningful on a GPU")
+''')
+
 # ── Stage G ──────────────────────────────────────────────────────────────────
 md(r"""
 ---
@@ -2111,7 +2186,7 @@ Significance answers "is it real"; D7 answers "does it matter".
 """)
 
 md(r"""
-## D9 · Save everything
+## D10 · Save everything
 """)
 
 code(r'''

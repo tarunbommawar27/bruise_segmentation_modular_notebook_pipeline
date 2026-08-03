@@ -125,7 +125,10 @@ def copy_authored_modules() -> None:
              "distill_efficient.py", "significance.py",
              # reliability_kd (Stage H: the gated loss, the B2 teacher axis, and
              # the gated YOLO pseudo-mask builder).
-             "reliability_kd.py"]
+             "reliability_kd.py",
+             # inference (handbook 18.1: the test-set pass and the 640 speed
+             # table, over the registry rather than over a hard-coded model list).
+             "inference.py"]
     for n in names:
         s = src / n
         if not s.exists():

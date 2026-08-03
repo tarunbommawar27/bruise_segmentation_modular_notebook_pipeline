@@ -50,6 +50,7 @@ bruisekit/                  the library (thin notebook, fat library)
   paths.py                                      host/environment resolution
   registry.py                                   the train-or-skip brain
   loaders.py                                    checkpoint -> model -> test numbers
+  inference.py                                  test-set pass + 640 speed table
   report.py                                     Stage D: per-image CSVs -> tables
   efficient_models.py                           Stage E: the four mobile baselines
   weights.py                                    Stage E: download + provenance
@@ -203,6 +204,41 @@ A finished run is skipped on sight via `DONE.json`, so re-running a cell is free
 
 `FORCE_RETRAIN = ["run_id", ...]` retrains specific runs even when a checkpoint
 exists. `RUN_STAGES = "AD"` runs a subset.
+
+### Inference and speed, for any model in the registry
+
+`RECOMPUTE_FROM_WEIGHTS = True` re-infers the models the notebook reports.
+`bruisekit/inference.py` does the same thing for an arbitrary set of families,
+and adds the half the analysis notebook never had — the speed table:
+
+It runs from **§D9**, driven by two flags in §0:
+
+```python
+RUN_INFERENCE_BLOCK = True    # False by default: D9 costs nothing and says so
+INFERENCE_MODELS    = None    # None = the three SegFormers; any registry family works
+```
+
+writing per-image CSVs, a headline, a fresh-vs-shipped reconciliation and a speed
+table. The same code has a CLI for a headless node:
+
+```bash
+python -m bruisekit.inference                                   # the three SegFormers
+python -m bruisekit.inference --models fastscnn --no-inference  # speed only
+```
+
+Two things it will not let you do, both of which have gone wrong before:
+
+- **mix devices in one speed table.** Every row carries `device_name` and the
+  write refuses if they differ. The shipped Stage A rows are full-A100 and the
+  Stage E rows are an A100 MIG 3g.40gb slice; those two are already not one table.
+- **compare a YOLO row to a SegFormer row as though they measured the same work.**
+  `path` records the timing method — `segformer` is forward + threshold,
+  `yolo_native_raw_forward` is the forward alone, because YOLO's raw module
+  returns a detection tuple with nothing to threshold.
+
+CPU timings are labelled `device == "cpu"`, run over a 16-image subset by
+default, and are for smoke-testing only. The **inference pass** is exact on CPU —
+that is what the table below shows.
 
 ### Do cached and re-inferred numbers agree?
 

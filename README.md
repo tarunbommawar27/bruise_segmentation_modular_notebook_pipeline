@@ -221,6 +221,7 @@ BRUISE_UNIFIED/
     ├── paths.py                the only host-aware module
     ├── registry.py             the train-or-skip brain (three tiers)
     ├── loaders.py              run → live model → test numbers
+    ├── inference.py            test-set pass + 640 speed table, over the registry
     ├── report.py               per-image CSV → tables (descriptive)
     ├── significance.py         omnibus, contrast family, multiplicity
     ├── efficient_models.py     the four mobile architectures
@@ -310,6 +311,60 @@ Verify the gate before spending GPU time:
 from bruisekit import reliability_kd as RK
 RK.self_test()      # 5 checks, CPU, under a second; raises on failure
 ```
+
+### Inference and speed
+
+`bruisekit/inference.py` runs the two things the analysis notebook calls
+"inference", and keeps them apart because they are not the same thing:
+
+- **the inference pass** — one forward over the 185 test images at each model's
+  val-selected best seed, at the operating point the run already carries. Exact
+  on CPU.
+- **the speed benchmark** — median/mean/p95 ms and FPS at 640. The analysis
+  notebook never computed this; it only read `benchmark_640.csv`, which was
+  produced once for five models and for nothing since.
+
+It works for any family the registry can resolve to a checkpoint, not just the
+five that happened to be timed. It runs from **§D9 of the notebook**, driven by
+two flags in §0 — so it lives where every other stage lives:
+
+```python
+RUN_INFERENCE_BLOCK = True    # False by default: D9 costs nothing and says so
+INFERENCE_MODELS    = None    # None = the three SegFormers; any registry family works
+```
+
+The same code has a CLI for a headless node:
+
+```bash
+# the three SegFormers, both halves, writing to <work>/outputs/inference
+python -m bruisekit.inference
+
+# any registry family; speed only
+python -m bruisekit.inference --models fastscnn lraspp_mobilenetv3 --no-inference
+```
+
+The timing recipe is the published one — 3 repeats, 10 warmup, seed 0, per-image
+batches, double `cuda.synchronize()`, images staged through the same 640
+dataloader — so a new row is comparable with the five shipped ones. Four things
+it enforces, all of which have gone wrong before:
+
+- **one machine per table.** Every row carries `device` and `device_name`, and
+  writing refuses if a table mixes them. A laptop row merged into a GPU table is
+  how `track_b`'s FPS column was destroyed once already.
+- **`path` records the timing method**, not the architecture: `segformer` rows
+  time forward + threshold, `yolo_native_raw_forward` rows time the forward only,
+  because YOLO's raw module returns a detection tuple with nothing to threshold.
+- **YOLO is `/255`, never ImageNet norm.** The 640 loader emits `/255` and
+  SegFormer normalises inside its own forward, so one staged batch is correct for
+  both.
+- **CPU timings are labelled and subset by default.** They are for smoke-testing;
+  only the inference pass is exact off-GPU.
+
+`--no-reconcile` turns off the last step, which re-checks the fresh scores
+against the shipped tables. Left on, it reproduces the agreement claim in the
+bundle README: `segformer_b0_direct` re-inferred on CPU comes back at 0.766278
+against a shipped 0.766318 — Δ 4e-5, max per-image Δ 6.8e-3, same complete-miss
+count.
 
 **On an offline cluster node,** export `BRUISE_NO_PIP=1` before starting the
 kernel. Optional heavyweight dependencies (`ultralytics`,
