@@ -1,0 +1,240 @@
+\documentclass[11pt]{article}
+\usepackage[a4paper,margin=1in]{geometry}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{amsmath,amssymb}
+\usepackage{xcolor}
+\usepackage{fancyhdr}
+\usepackage{enumitem}
+\usepackage[colorlinks=true,linkcolor=black,urlcolor=black]{hyperref}
+
+% AAAI-consolidated look: dark-blue section headings + running header rule
+\definecolor{secblue}{RGB}{31,73,125}
+\usepackage{sectsty}
+\sectionfont{\color{secblue}\large}
+
+\pagestyle{fancy}
+\fancyhf{}
+\renewcommand{\headrulewidth}{0.4pt}
+\lhead{\small Bruise Segmentation Results}
+\rhead{\small Saved-Model Native-Argmax Evaluation}
+\cfoot{\thepage}
+
+\newcolumntype{R}{>{\raggedleft\arraybackslash}p{2.1cm}}
+\setlength{\parindent}{0pt}
+\setlength{\parskip}{5pt}
+
+\begin{document}
+
+\begin{center}
+  {\LARGE\bfseries Bruise Segmentation Results Summary}\\[4pt]
+  {\large Saved-Model Evaluation: Native-Argmax YOLO and Subject-Level Analysis}
+\end{center}
+
+\vspace{4pt}
+
+\textbf{Models.} The five \emph{saved} project checkpoints (loaded and scored, no
+retraining): a SegFormer-B2 teacher, SegFormer-B0 direct and distilled students, and
+YOLO26n-sem direct and distilled.
+
+\textbf{Evaluation set.} 185 white-light images from 28 subjects, scored against the
+2-of-3 majority-vote mask on a common $640\times640$ grid. SegFormer thresholds fitted on
+the 134-image validation set (1-SE tie-band sweep); YOLO uses native argmax.
+
+\textbf{YOLO evaluation.} Native argmax only. The custom /255 YOLO path is excluded.
+
+\textbf{Source.} Consolidated from \texttt{docs/saved\_models\_report.pdf}. Section~4
+per-group figures are recomputed from the saved-model per-image outputs
+(SegFormer \texttt{fixed\_test\_evaluation}, YOLO native), so small numeric differences
+from the report's figure-based values (a $<0.01$ Dice threshold refinement) are expected.
+
+\section{Overall Performance}
+
+\begin{center}
+\begin{tabular}{l R R R R}
+\toprule
+Model & Parameters (M) & Mean Dice & Median Dice & Complete-miss (\%) \\
+\midrule
+SegFormer-B0 distilled   & 3.71  & 0.786 & 0.828 & 0.54 \\
+SegFormer-B0 direct      & 3.71  & 0.777 & 0.813 & 0.54 \\
+SegFormer-B2 teacher     & 27.35 & 0.773 & 0.834 & 0.00 \\
+YOLO26n distilled        & 1.63  & 0.741 & 0.843 & 7.03 \\
+YOLO26n direct           & 1.63  & 0.735 & 0.849 & 9.73 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\textit{\small SegFormer mean/median/miss transcribed from the saved report (Table~1).
+YOLO native mean from the report (model-vs-majority), median and complete-miss from the
+native-argmax evaluation (\texttt{yolo\_native\_640\_comparison.csv}).}
+
+\textbf{Main observation.}
+On these saved checkpoints the three SegFormer models cluster tightly (0.773--0.786 mean
+Dice), and the \emph{distilled} B0 (0.786) is the top mean scorer---edging the B2 teacher
+(0.773). This ``student beats teacher'' ordering is specific to the saved checkpoints; it
+did not survive the batch-equalised retraining. The clearest practical separation is the
+complete-miss rate: SegFormer-B2 and distilled B0 are essentially miss-free, whereas
+native-argmax YOLO blanks 7--10\% of images despite a comparable (higher) median.
+
+\section{Paired Contrasts}
+
+Subject-level cluster bootstrap ($B=4000$). $\Delta = $ model A $-$ model B on the same
+resample; $P(\Delta>0)$ is one-sided. A contrast is resolvable only if its interval
+excludes zero.
+
+\begin{center}
+\begin{tabular}{l c c c l}
+\toprule
+Contrast & $\Delta$ & 95\% CI & $P(\Delta>0)$ & Verdict \\
+\midrule
+Distillation (B0-dist $-$ B0-direct)        & $+0.009$ & $[-0.009,\,+0.029]$ & 0.82 & n.s.\ (no distillation gain) \\
+Student $-$ teacher (B0-dist $-$ B2)         & $+0.013$ & $[-0.023,\,+0.052]$ & 0.74 & n.s. \\
+YOLO distill $-$ direct                      & $+0.006$ & $[-0.019,\,+0.030]$ & 0.67 & n.s. \\
+SegFormer $-$ YOLO (B0-dist $-$ YOLO-direct) & $+0.051$ & $[-0.011,\,+0.117]$ & 0.94 & n.s.\ (CI spans zero) \\
+Miss rate: YOLO-direct $-$ B0-dist          & $+9.19$  & $[+1.83,\,+17.54]$  & 1.00 & significant \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\textbf{Interpretation.}
+At 28 subjects, distillation and student-vs-teacher are both unresolvable Dice contrasts.
+Notably, on these saved checkpoints \emph{even the SegFormer$-$YOLO Dice contrast is not
+significant} ($+0.051$, CI spans zero)---unlike the batch-equalised retrained run. The one
+clearly resolved result is the higher complete-miss rate of YOLO-direct relative to
+SegFormer-B0 distilled.
+
+\section{Inference Performance}
+
+Timing boundary: $640\times640$ tensor already on the GPU through output-mask generation;
+disk load, decode, resize, and host-to-device copy are excluded. YOLO uses native argmax.
+
+\begin{center}
+\begin{tabular}{l R R R}
+\toprule
+Model & Median (ms) & FPS & Params (M) \\
+\midrule
+SegFormer-B2 teacher   & 32.3 & 30.8  & 27.35 \\
+SegFormer-B0 direct    & 15.9 & 62.6  & 3.71 \\
+SegFormer-B0 distilled & 15.9 & 62.6  & 3.71 \\
+YOLO26n direct         & 7.9  & 125.2 & 1.63 \\
+YOLO26n distilled      & 7.9  & 126.8 & 1.63 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\begin{itemize}[leftmargin=1.4em,itemsep=2pt,topsep=2pt]
+  \item SegFormer-B0 delivers about twice the throughput of SegFormer-B2 at roughly
+        7.4$\times$ fewer parameters.
+  \item YOLO26n runs about twice as fast as SegFormer-B0 and about four times as fast as
+        SegFormer-B2, but its complete-miss rate is far higher.
+  \item Direct and distilled versions have identical deployment cost---distillation
+        changes training, not the deployed architecture.
+\end{itemize}
+
+\section{Fairness Evaluation by ITA-Derived Skin-Tone Group}
+
+\textit{\small Exploratory. ITA is an image-derived skin-tone proxy, not race, ethnicity,
+or self-identified skin tone. Per-group medians, recall, miss rates and omnibus tests are
+recomputed from the saved-model per-image outputs (native-argmax YOLO); at $\approx$9--17
+subjects per group these are directional, not confirmed disparities.}
+
+\begin{center}
+\begin{tabular}{l c c c l l R}
+\toprule
+Model & KW $p$ & Sig. & Dice gap & Best group & Worst group & Miss gap (pp) \\
+\midrule
+SegFormer-B2 teacher   & 0.013 & Yes & 0.145 & Intermediate (III-IV) & Light (II-III) & 0.00 \\
+SegFormer-B0 direct    & 0.032 & Yes & 0.152 & Intermediate (III-IV) & Tan (IV)       & 2.56 \\
+SegFormer-B0 distilled & 0.085 & No  & 0.114 & Intermediate (III-IV) & Tan (IV)       & 2.56 \\
+YOLO26n direct         & 0.082 & No  & 0.110 & Intermediate (III-IV) & Light (II-III) & 28.21 \\
+YOLO26n distilled      & 0.066 & No  & 0.109 & Brown (V)             & Light (II-III) & 17.95 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+SegFormer-B2 and B0-direct show a nominally significant omnibus difference (consistent
+with the report). The striking pattern is YOLO's light-skin \emph{under-detection}: its
+native complete-miss rate on the Light group reaches \textbf{28.2\%} (direct), against
+0--7\% elsewhere. The subgroup analysis is underpowered and must not be presented as a
+confirmed fairness failure.
+
+\subsection*{Does the light-skin signal survive lesion size?}
+
+Light-skin bruises are the smallest in this cohort, so size is a confound. A
+subject-clustered regression \texttt{recall $\sim$ log$_{10}$(size) + light} isolates the
+light-skin term at equal size (from the saved report, Table~3; negative = worse on light
+skin):
+
+\begin{center}
+\begin{tabular}{l l c c}
+\toprule
+Model & Outcome & light coef. & $p$ (clustered) \\
+\midrule
+SegFormer-B2 teacher   & recall        & $-0.195$ & 0.003 \\
+SegFormer-B0 direct    & recall        & $-0.098$ & 0.016 \\
+SegFormer-B0 distilled & recall        & $-0.097$ & 0.057 \\
+YOLO26n direct         & recall        & $-0.255$ & 0.014 \\
+YOLO26n distilled      & recall        & $-0.246$ & 0.003 \\
+YOLO26n direct         & miss (logit)  & $+1.56$  & 0.088 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+The light-skin recall deficit survives size control for most models (borderline for
+distilled B0), so it is not \emph{only} a size artefact---but at nine light-skin subjects
+it remains a hypothesis to test on more data.
+
+\subsection*{Per-group detail}
+
+\begin{center}
+\small
+\begin{tabular}{l l c c c c}
+\toprule
+Model & ITA group & Images & Median Dice & Mean recall & Miss (\%) \\
+\midrule
+SegFormer-B2 teacher & Light (II-III)        & 39 & 0.731 & 0.572 & 0.00 \\
+SegFormer-B2 teacher & Intermediate (III-IV) & 38 & 0.877 & 0.787 & 0.00 \\
+SegFormer-B2 teacher & Tan (IV)              & 24 & 0.855 & 0.697 & 0.00 \\
+SegFormer-B2 teacher & Brown (V)             & 29 & 0.836 & 0.733 & 0.00 \\
+SegFormer-B2 teacher & Dark (VI)             & 55 & 0.820 & 0.732 & 0.00 \\
+\midrule
+SegFormer-B0 direct & Light (II-III)         & 39 & 0.789 & 0.682 & 2.56 \\
+SegFormer-B0 direct & Intermediate (III-IV)  & 38 & 0.849 & 0.801 & 0.00 \\
+SegFormer-B0 direct & Tan (IV)               & 24 & 0.696 & 0.752 & 0.00 \\
+SegFormer-B0 direct & Brown (V)              & 29 & 0.834 & 0.772 & 0.00 \\
+SegFormer-B0 direct & Dark (VI)              & 55 & 0.797 & 0.719 & 0.00 \\
+\midrule
+SegFormer-B0 distilled & Light (II-III)        & 39 & 0.790 & 0.688 & 2.56 \\
+SegFormer-B0 distilled & Intermediate (III-IV) & 38 & 0.869 & 0.806 & 0.00 \\
+SegFormer-B0 distilled & Tan (IV)              & 24 & 0.755 & 0.726 & 0.00 \\
+SegFormer-B0 distilled & Brown (V)             & 29 & 0.838 & 0.796 & 0.00 \\
+SegFormer-B0 distilled & Dark (VI)             & 55 & 0.836 & 0.785 & 0.00 \\
+\midrule
+YOLO26n direct & Light (II-III)         & 39 & 0.772 & 0.517 & 28.21 \\
+YOLO26n direct & Intermediate (III-IV)  & 38 & 0.882 & 0.793 & 5.26 \\
+YOLO26n direct & Tan (IV)               & 24 & 0.863 & 0.814 & 0.00 \\
+YOLO26n direct & Brown (V)              & 29 & 0.863 & 0.823 & 3.45 \\
+YOLO26n direct & Dark (VI)              & 55 & 0.834 & 0.748 & 7.27 \\
+\midrule
+YOLO26n distilled & Light (II-III)        & 39 & 0.773 & 0.543 & 17.95 \\
+YOLO26n distilled & Intermediate (III-IV) & 38 & 0.849 & 0.750 & 10.53 \\
+YOLO26n distilled & Tan (IV)              & 24 & 0.832 & 0.765 & 4.17 \\
+YOLO26n distilled & Brown (V)             & 29 & 0.881 & 0.786 & 0.00 \\
+YOLO26n distilled & Dark (VI)             & 55 & 0.843 & 0.790 & 1.82 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\section{Final Takeaway}
+
+On the saved checkpoints, SegFormer-B0 distilled matches the B2 teacher's Dice (it is
+nominally the top scorer) at about twice the throughput and 7.4$\times$ fewer parameters.
+The paired analysis does \emph{not} establish a Dice gain from distillation, nor even a
+significant SegFormer$-$YOLO Dice gap at this sample size; distillation's practical value
+here is compact deployment with a near-zero complete-miss rate. Native-argmax YOLO is
+substantially faster but its higher complete-miss rate---concentrated on the smallest,
+lightest-skin lesions---remains the principal limitation. Every model beats the
+three-expert human--human agreement ceiling (0.639 mean Dice), so model-to-model Dice
+differences here sit below the annotation-noise floor.
+
+\end{document}

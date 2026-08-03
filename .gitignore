@@ -103,3 +103,43 @@ benchmark_640_integrated/
 
 # ---- Trimmed: out-of-scope eval outputs ----
 test_eval_640_no_upscale/
+
+# ============================================================
+# BRUISE_UNIFIED bundle — publish CODE ONLY.
+# The bundle on disk is ~6.5 GB: 1016 clinical photographs of 143
+# human subjects, plus 27 trained checkpoints. None of it goes to
+# a remote. These rules are additive to the patterns above and are
+# written explicitly rather than relying on `**/images/` etc., so
+# that a future directory rename cannot silently start publishing
+# patient photographs.
+# ============================================================
+BRUISE_UNIFIED/data/
+BRUISE_UNIFIED/checkpoints/
+BRUISE_UNIFIED/pretrained_weights/
+BRUISE_UNIFIED/_work/
+BRUISE_UNIFIED/splits/
+BRUISE_UNIFIED/ita_labels/
+BRUISE_UNIFIED/manifests/
+BRUISE_UNIFIED/results/
+BRUISE_UNIFIED/FINAL_RESULT/
+BRUISE_DISTILL_B5_RESULT/
+EXTRA/
+
+# ---- the generator + library sources ARE code and DO ship ----
+!scripts/unified_lib/
+!scripts/unified_lib/**
+!scripts/6*.py
+!scripts/7*.py
+!scripts/vendor_efficient_nets.py
+
+# ---- docs: ship the sources, not the built binaries ----
+docs/*.pdf
+docs/*.pptx
+docs/figures_distill/
+
+# ---- strays the un-ignore rules above would otherwise re-admit ----
+scripts/**/__pycache__/
+BRUISE_UNIFIED/*.pptx
+BRUISE_UNIFIED/*.pdf
+AAAI*.pdf
+*.pyc

@@ -1,0 +1,1504 @@
+% ============================================================================
+%  SegFormer-B5 Knowledge Distillation -- Detailed Technical Report
+%  Compile:  tools\tectonic\tectonic.exe docs\b5_distillation_report.tex
+%  Self-contained article class.
+%
+%  SOURCE OF EVERY NUMBER: BRUISE_DISTILL_B5_RESULT/ (see Appendix A).
+%  Nothing here is transcribed from an earlier PDF; the Phase 1-3 core-model
+%  rows are the project's own best-seed results, and every Phase 4 row was
+%  recomputed from the per-arm DONE.json / test_per_image.csv on disk.
+% ============================================================================
+\documentclass[11pt]{article}
+\usepackage[a4paper,margin=1in]{geometry}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{amsmath,amssymb}
+\usepackage{xcolor}
+\usepackage{fancyhdr}
+\usepackage{enumitem}
+\usepackage{longtable}
+\usepackage{graphicx}
+\usepackage{float}
+\usepackage{caption}
+
+\definecolor{secblue}{RGB}{31,73,125}
+\definecolor{boxgray}{RGB}{244,246,249}
+\definecolor{wingreen}{RGB}{20,110,60}
+\definecolor{losered}{RGB}{150,40,40}
+\definecolor{rulegray}{RGB}{200,205,212}
+\definecolor{proscol}{RGB}{20,110,60}
+\definecolor{conscol}{RGB}{160,64,0}
+
+\usepackage[colorlinks=true,linkcolor=secblue,urlcolor=secblue,citecolor=secblue]{hyperref}
+
+\usepackage{sectsty}
+\sectionfont{\color{secblue}\large}
+\subsectionfont{\color{secblue}\normalsize}
+\subsubsectionfont{\color{secblue}\normalsize}
+\usepackage[most]{tcolorbox}
+
+\pagestyle{fancy}\fancyhf{}
+\renewcommand{\headrulewidth}{0.4pt}
+\lhead{\small Bruise Segmentation}\rhead{\small B5 Distillation --- Technical Report}\cfoot{\thepage}
+
+\newcolumntype{n}{>{\raggedleft\arraybackslash}p{1.30cm}}
+\newcolumntype{m}{>{\raggedleft\arraybackslash}p{1.05cm}}
+\newcolumntype{M}{>{\raggedleft\arraybackslash}p{1.90cm}}
+\newcolumntype{C}{>{\raggedleft\arraybackslash}p{3.10cm}}
+\newcolumntype{W}{>{\raggedleft\arraybackslash}p{3.75cm}}   % wide CI column
+\newcolumntype{q}{>{\raggedleft\arraybackslash}p{1.42cm}}   % result-table numeric
+\newcolumntype{L}{>{\raggedright\arraybackslash}p{4.6cm}}
+\newcolumntype{K}{>{\raggedright\arraybackslash}p{3.4cm}}
+
+\setlength{\parindent}{0pt}\setlength{\parskip}{5pt}
+\setlength{\tabcolsep}{5pt}
+\renewcommand{\arraystretch}{1.12}
+% prose in this report carries many unbreakable math atoms (CIs, deltas); give TeX
+% room to stretch a line rather than letting it run into the margin
+\setlength{\emergencystretch}{3em}
+\hbadness=10000
+
+\newtcolorbox{keybox}[1][]{colback=boxgray,colframe=secblue,boxrule=0.6pt,arc=2pt,
+  left=8pt,right=8pt,top=6pt,bottom=6pt,#1}
+\newtcolorbox{warnbox}[1][]{colback=boxgray,colframe=conscol,boxrule=0.6pt,arc=2pt,
+  left=8pt,right=8pt,top=6pt,bottom=6pt,#1}
+\newcommand{\win}[1]{\textcolor{wingreen}{\textbf{#1}}}
+\newcommand{\lose}[1]{\textcolor{losered}{#1}}
+\newcommand{\tabnote}[1]{\par\vspace{2pt}{\footnotesize\itshape #1}\par}
+\newcommand{\pro}[1]{\item[\textcolor{proscol}{$+$}] #1}
+\newcommand{\con}[1]{\item[\textcolor{conscol}{$-$}] #1}
+
+\begin{document}
+
+% ===========================================================================
+\begin{center}
+  {\LARGE\bfseries Knowledge Distillation from a SegFormer-B5 Teacher}\\[6pt]
+  {\large Detailed Technical Report --- Phase 4 of the Forensic Bruise Segmentation Study}\\[7pt]
+  {\small Eleven distillation arms \, $\cdot$ \, one locked evaluation \, $\cdot$ \,
+   a pre-registered success hierarchy}\\[4pt]
+  {\footnotesize 697/134 train/val split (Paul's masks) \ $\cdot$ \ 185-image, 28-subject
+   2-of-3 consensus test set \ $\cdot$ \ all scoring at $640\times640$}
+\end{center}
+
+\vspace{4pt}
+{\color{rulegray}\hrule height 1pt}
+\vspace{6pt}
+
+\begin{keybox}
+\textbf{Result in one paragraph.} Across a $52\times$ parameter range no architecture separates
+on Dice, but the teachers B2 (27.4M) and B5 (84.6M) were shown on \emph{validation} to fail on
+different images, with a measured $+0.026$ Dice of per-image routing headroom (CI
+$[+0.017,+0.036]$, $P=1.00$). Ten distillation arms were then run into a 3.71M SegFormer-B0
+student under one locked evaluation. Averaging the two teachers uniformly is \lose{INFERIOR}. A
+per-pixel \emph{reliability gate} --- confidence-weighted fusion biased by a validation-fitted
+scalar --- is the study's only \win{REPORTABLE WIN}: overall Dice is non-inferior, complete-miss
+stays at $0.00\%$, and recall on small bruises rises from $0.748$ to $0.801$
+($\Delta=+0.053$, CI $[+0.021,+0.076]$, $P(\Delta>0)=0.996$). Every failure-targeted refinement
+stacked on top of that gate made things worse, including the configuration the project's own
+planning document had nominated as the headline experiment.
+\end{keybox}
+
+\vspace{2pt}
+\tableofcontents
+\vspace{6pt}
+{\color{rulegray}\hrule height 0.5pt}
+
+% ===========================================================================
+\section{What this study is, and what it is not}
+
+\subsection{The dataset is a multi-annotator design}
+
+This is not a standard train/test segmentation benchmark. The NIJ white-light bruise photography
+set was annotated independently by several people; the three highest-volume annotators are Paul,
+Gbarimah and Erik. Their \textbf{strict intersection} --- the images all three labelled --- is
+\textbf{185 photographs from 28 subjects}, and that intersection \emph{is} the fixed test set. The
+test target is the \textbf{2-of-3 pixel majority vote}, not any single annotator's mask.
+
+All training uses \textbf{Paul's masks only}, on his 831 non-intersection images (697 train / 134
+validation, subject-grouped). Subject disjointness between train and test is therefore
+\emph{structural}, not merely enforced. Evaluating a Paul-trained model against a three-annotator
+consensus makes every number in this report a \textbf{cross-annotator generalisation} measurement.
+
+\subsection{$n=28$ is a ceiling, not a budget choice}
+
+There are 28 test subjects because that is how many subjects all three annotators covered. A 29th
+requires new annotation --- no amount of compute changes it. Two consequences run through
+everything below:
+
+\begin{itemize}[leftmargin=1.5em,itemsep=2pt]
+  \item The effective sample size is \textbf{28, not 185}. Every interval in this report comes
+        from a \textbf{paired, subject-level cluster bootstrap} ($B=5000$), which resamples
+        subjects and scores both models on the same resample.
+  \item The \textbf{minimum detectable effect} in median Dice is $\approx 0.03$--$0.04$.
+        Model-vs-model Dice gaps in this project are $0.002$--$0.02$. They are not resolvable,
+        and no amount of re-analysis will make them so.
+\end{itemize}
+
+For scale: mean human-vs-human Dice on this test set is $0.639$. The annotation noise floor is
+roughly $0.36$, an order of magnitude larger than the differences between architectures.
+
+\begin{keybox}
+\textbf{Framing rule used throughout.} Greater model capacity alone gives \emph{diminishing
+returns under the current data and evaluation protocol}. This is stated as an observation, not as
+a proven hard ceiling --- and \S\ref{sec:oracle} shows the qualification matters: a
+\emph{combination} of two models still has measurable headroom that neither reaches alone.
+\end{keybox}
+
+% ===========================================================================
+\section{The locked evaluation}
+\label{sec:lock}
+
+\subsection{One code path scores every model}
+
+Cross-arm comparability is the whole point of this phase, so a single implementation
+(\texttt{kd\_core.py}) scores everything: the B2 teacher, the B5 teacher, the B2$\to$B0 reference
+student, and all ten distillation arms.
+
+\begin{enumerate}[leftmargin=1.6em,itemsep=2pt]
+  \item Sweep the decision threshold on \textbf{validation only}, over $0.05$--$0.95$.
+  \item Apply that single threshold \textbf{once} to the 185-image test set.
+  \item Score at $640\times640$ with nearest-neighbour resampling of both prediction and ground
+        truth, identically for every model.
+  \item Write a 185-row \texttt{test\_per\_image.csv} carrying Dice, IoU, precision, recall,
+        predicted positive pixels, ground-truth positive pixels and subject ID.
+\end{enumerate}
+
+Critically, the reference checkpoints are \textbf{re-scored} by \texttt{score\_reference.py} rather
+than being copied from an earlier notebook. That is why the teacher rows in this report differ
+slightly from the Phase 1--3 tables elsewhere in the project (\S\ref{sec:discrep}).
+
+\subsection{Two definitions that carry the analysis}
+
+\textbf{Complete miss.} An image where the model predicts \emph{zero} bruise pixels although the
+ground truth has some. Formally $\mathrm{pred\_positive\_pixels}=0$ and
+$\mathrm{gt\_positive\_pixels}>0$. In a forensic workflow this is the expensive error: nothing at
+all is surfaced to the examiner. Note that a model can score $0.00$ Dice \emph{without} being a
+complete miss --- it predicted something, in the wrong place. Both are tracked, separately.
+
+\textbf{Small bruise.} The bottom tercile of the test set by ground-truth area: images with
+$\le 8{,}211$ positive pixels, \textbf{62 of the 185}. These are the hardest to detect and, for
+early-stage injury documentation, the most clinically consequential.
+
+\subsection{Statistics}
+
+Every arm is compared to the B2$\to$B0 reference with a \textbf{paired subject-level cluster
+bootstrap}, $B=5000$ resamples over the 28 subjects, seed fixed. Pairing (the same resample scores
+both models) is both correct for a shared test set and roughly $2\times$ tighter than independent
+resampling. Reported quantities are the point estimate, the 95\% percentile interval, and
+$P(\Delta>0)$ --- which distinguishes a borderline null from a coin flip in a way a bare
+``n.s.'' cannot.
+
+% ===========================================================================
+\section{Phase 1--3: where the models stood before distillation}
+
+\subsection{Best-seed core-model results}
+\label{sec:bestseed}
+
+Seeds were selected on validation, then evaluated once on test. YOLO is reported on
+\textbf{native-argmax} decoding (Ultralytics' own letterbox preprocessing and class-map argmax),
+which is the only correct decoding for a model trained by Ultralytics' loop --- the project's
+custom raw-logit path feeds it ImageNet-normalised pixels it never saw in training.
+
+\begin{center}\small
+\begin{tabular}{L M M M M}
+\toprule
+\textbf{Model} & \textbf{Params (M)} & \textbf{Mean Dice} & \textbf{Median Dice} &
+\textbf{Miss (\%)} \\
+\midrule
+SegFormer-B5 (teacher)  & 84.59 & \textbf{0.7727} & \textbf{0.8273} & \textbf{0.00} \\
+SegFormer-B2 (teacher)  & 27.35 & 0.7692 & 0.8192 & \textbf{0.00} \\
+SegFormer-B0 distilled  & 3.71  & 0.7680 & 0.8167 & \textbf{0.00} \\
+SegFormer-B0 direct     & 3.71  & 0.7663 & 0.8129 & 0.54 \\
+YOLO26n-sem distilled   & 1.63  & 0.7261 & 0.8012 & 2.16 \\
+YOLO26n-sem direct      & 1.63  & 0.7021 & 0.8061 & \lose{6.49} \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\tabnote{B5 is the locked-eval score of its validation-selected seed (\S\ref{sec:b5seeds}); the
+other five rows are the project's best-seed final-run results.}
+
+\begin{figure}[H]\centering
+\includegraphics[width=\textwidth]{figures_distill/f1_core_models.png}
+\caption{Left: accuracy is flat across a $52\times$ parameter range. Right: the same six
+checkpoints on the same test set, ordered clearly by complete-miss rate.}
+\end{figure}
+
+Across $1.63$M to $84.59$M parameters, mean Dice spans only $0.702$--$0.773$, and the four
+SegFormers span $0.766$--$0.773$. That entire spread sits inside the $\approx0.03$--$0.04$
+detectable effect. Complete-miss, by contrast, ranges $0.00\%$ to $6.49\%$; the SegFormer--YOLO
+miss contrast is $+6.5$ points with CI $[+2.4,+11.6]$ --- one of the few significant accuracy
+findings the project has.
+
+\subsection{The B5 teacher: three seeds}
+\label{sec:b5seeds}
+
+B5 was trained with the core SegFormer recipe verbatim --- same split, resolution, augmentation,
+loss, epoch selection and threshold protocol --- so it sits directly comparable to B2 and B0.
+Three seeds were run; the teacher used for every distillation arm was selected on validation.
+
+\begin{center}\small
+\begin{tabular}{K M m M M M}
+\toprule
+\textbf{Seed} & \textbf{Val mean Dice} & \textbf{Thr} & \textbf{Test mean} &
+\textbf{Test median} & \textbf{Miss} \\
+\midrule
+42                        & 0.7785 & 0.35 & 0.7527 & 0.8124 & 3/185$^\dagger$ \\
+\textbf{123 (selected)}   & \textbf{0.7881} & 0.50 & \textbf{0.7727} & 0.8273 & 0/185 \\
+2026                      & 0.7860 & 0.40 & 0.7676 & 0.8298 & 1/185$^\dagger$ \\
+\midrule
+3-seed mean               & 0.7842 & --- & $0.7643\pm0.0104$ & 0.8232 & --- \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\tabnote{$^\dagger$ These are images with $0.00$ Dice, not blank predictions; the packaged
+per-seed summary correctly reports $0$ complete misses for seed 42. Epochs trained: 36 / 42 / 47.
+Parameter count $84{,}594{,}113$, micro-batch 8, no gradient accumulation.}
+
+Three things follow. First, seed 123 was chosen by highest validation Dice \emph{before} any test
+number was consulted; its test score happening to be the best of the three is a coincidence the
+selection rule could not have exploited. Second, the seed spread ($\pm 0.010$ mean Dice) is
+comparable to the \emph{entire} gap between B5, B2 and B0 --- single-seed rankings among these
+models are noise. Third, $84.6$M parameters buys $+0.0035$ mean Dice over $27.4$M and $+0.0047$
+over $3.71$M.
+
+Before its probabilities were used as soft targets, B5 was \textbf{temperature-calibrated on
+validation}, giving $T=2.20$. B2 was calibrated the same way, giving $T=1.76$.
+
+\subsection{Deployment cost}
+
+A100, $640\times640$, batch 1, fp32, 185 images $\times$ 3 repeats, preprocessing excluded from the
+timer (raw forward pass only).
+
+\begin{center}\small
+\begin{tabular}{L M M M}
+\toprule
+\textbf{Model} & \textbf{Params (M)} & \textbf{Median (ms)} & \textbf{FPS} \\
+\midrule
+SegFormer-B5           & 84.59 & --- & --- \\
+SegFormer-B2 teacher   & 27.35 & 33.67 & 29.7 \\
+SegFormer-B0 distilled & 3.71  & 16.64 & 60.1 \\
+YOLO26n-sem            & 1.63  & 8.22  & 121.7 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+SegFormer-B0 runs $2.02\times$ faster than the B2 teacher on $7.4\times$ fewer parameters, at the
+same Dice and the same $0\%$ complete-miss. \textbf{Compression on this task is free.} The open
+question --- and the reason Phase 4 exists --- is whether distillation can additionally buy
+something the directly-trained student does not already have.
+
+% ===========================================================================
+\section{The multi-teacher gate: a validation oracle}
+\label{sec:oracle}
+
+Multi-teacher methods cost twice the teacher compute per training step, so before committing to
+them a hard precondition was evaluated: \emph{are B2 and B5 actually complementary?} The test was
+run on the \textbf{validation set}. The test set was not touched.
+
+\begin{center}\small
+\begin{tabular}{>{\raggedright\arraybackslash}p{9.6cm} C}
+\toprule
+\textbf{Quantity (validation only: 134 images, 20 subjects)} & \textbf{Value} \\
+\midrule
+Spearman correlation of per-image Dice, B2 vs B5   & 0.819 \\
+Images where B5 beats B2 by more than 0.10 Dice    & 18 \\
+Images where B2 beats B5 by more than 0.10 Dice    & 12 \\
+B2 mean Dice                                       & 0.7717 \\
+B5 mean Dice                                       & 0.7881 \\
+Oracle (better teacher chosen per image), mean Dice & 0.8140 \\
+Oracle gain over the best single teacher            & $+0.0258$ \\
+\quad 95\% CI (subject-cluster bootstrap)           & $[+0.0165,\ +0.0362]$ \\
+\quad $P(\text{gain}>0)$                            & 1.00 \\
+\textbf{Gate decision}                              & \win{PASS} \\
+Reliability weight on B5, $\mathrm{rel}_b$          & 0.634 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\begin{figure}[H]\centering
+\includegraphics[width=0.68\textwidth]{figures_distill/f5_oracle.png}
+\caption{The gate that authorised the multi-teacher arms. Measured on validation; the test set was
+never involved in this decision.}
+\end{figure}
+
+\textbf{Interpretation.} A per-image Spearman of $0.82$ still leaves 30 validation images where one
+teacher beats the other by more than $0.10$ Dice, in both directions. A perfect per-image router
+would gain $\approx 2.6$ Dice points over either teacher alone, with the interval clear of zero.
+\textbf{So the flat single-model Dice of \S\ref{sec:bestseed} is a ceiling on \emph{single}
+models, not on the task.} There is measured, validated headroom for a method that can decide which
+teacher to believe.
+
+The same script emits $\mathrm{rel}_b=0.634$, a scalar summarising how much more often B5 is the
+right teacher. It is carried into training as the only global bias in the fusion gate --- and it
+is fitted on validation, so no test information reaches the method.
+
+% ===========================================================================
+\section{Method: the common objective and the eleven arms}
+
+\subsection{The shared loss}
+
+Every arm extends one calibrated response objective:
+\[
+  \mathcal{L}\;=\;\alpha\,\mathrm{DiceBCE}(z_s,\,y)\;+\;(1-\alpha)\,
+  \mathrm{BCE}\!\left(z_s,\ \sigma(z_t/T)\right)
+\]
+where $z_s$ is the student logit map, $y$ the ground-truth mask, $z_t$ the teacher logit map and
+$T$ the validation-fitted temperature. This is the \textbf{calibrated soft-target} form (Menon et
+al.\ 2021), \emph{not} classical Hinton KD: there is no $T^2$ rescaling and the student's logits
+are untempered. $\alpha$ is searched on validation.
+
+\subsection{Alpha search (validation only)}
+
+\texttt{optuna\_alpha.py} runs short 15-epoch probes across a five-point grid (Optuna TPE where
+available, grid otherwise), scored on validation. The full arm then trains at the selected
+$\alpha$. No test data is involved.
+
+\begin{center}\small
+\begin{tabular}{K q q q q q M}
+\toprule
+\textbf{Configuration} & $\alpha{=}0.300$ & $0.462$ & $0.625$ & $0.787$ & $0.950$ &
+\textbf{Selected} \\
+\midrule
+Single B5, response   & 0.7017 & 0.6951 & \textbf{0.7019} & 0.6975 & 0.7010 & $\alpha=0.625$ \\
+B2$+$B5 ensemble      & 0.7016 & 0.7067 & 0.7004 & 0.6952 & \textbf{0.7089} & $\alpha=0.950$ \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\tabnote{Validation mean Dice from the 15-epoch probes. The single-teacher curve is flat to within
+$0.007$ across the whole range --- the selection is close to arbitrary and should be read as such.
+The ensemble curve is only marginally better behaved.}
+
+\begin{warnbox}
+\textbf{An honest weakness.} The single-teacher $\alpha$ sweep spans $0.6951$--$0.7019$, a range
+smaller than this project's own seed-to-seed variation. Selecting $\alpha$ from it is selecting
+noise. The selected values are used because they were pre-committed, not because the search
+resolved anything.
+\end{warnbox}
+
+\subsection{The arms}
+
+\begin{center}\small
+\begin{tabular}{>{\raggedleft\arraybackslash}p{0.55cm} >{\raggedright\arraybackslash}p{3.0cm} >{\raggedright\arraybackslash}p{1.55cm} >{\raggedright\arraybackslash}p{5.5cm} >{\raggedright\arraybackslash}p{2.35cm}}
+\toprule
+\textbf{\#} & \textbf{Arm} & \textbf{Teachers} & \textbf{What is transferred} & \textbf{Family} \\
+\midrule
+1  & Response KD        & B5      & Calibrated teacher probabilities        & Baseline \\
+2  & CWD (ICCV'21)      & B5      & Per-channel spatial distributions       & Feature \\
+3  & BPKD (WACV'24)     & B5      & Edge and body knowledge, separately     & Structure \\
+4  & Angular (WACV'24)  & B5      & Feature direction, not magnitude        & Feature \\
+5  & DKD (CVPR'22)      & B5      & Target / non-target logits              & \lose{Not completed} \\
+6  & Uniform ensemble   & B2$+$B5 & Mean of the two probability maps        & Multi-teacher \\
+7  & \win{Reliability-gated} & B2$+$B5 & Per-pixel confidence $\times$ disagreement gate & \win{Novel} \\
+8  & \quad $+$ boundary & B2$+$B5 & Gate, boundary-weighted                 & Ablation \\
+9  & \quad $+$ hard     & B2$+$B5 & Gate, failure-risk weighted             & Ablation \\
+10 & \quad $+$ group    & B2$+$B5 & Gate, worst-ITA-group loss              & Ablation \\
+11 & \quad $+$ full     & B2$+$B5 & Gate $+$ all three add-ons              & Ablation \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+All students are SegFormer-B0 (3.71M), initialised from the same \texttt{mit-b0} ImageNet encoder,
+trained at seed 42 on the same 697/134 split with the same schedule. Micro-batch is 32 except for
+CWD and Angular (16), which hold teacher features in memory.
+
+\subsection{Pre-registered success hierarchy}
+\label{sec:hierarchy}
+
+Because Dice is flat, ``success'' is defined by priority order, fixed before the arms ran:
+
+\begin{enumerate}[leftmargin=1.8em,itemsep=2pt]
+  \item \textbf{Non-inferiority in subject-level Dice}, margin $0.03$ --- the primary gate.
+  \item Reduction in the \textbf{failure tail}: complete-miss, \%recall$<0.10$, \%Dice$<0.20$,
+        5th-percentile subject Dice.
+  \item Improved \textbf{small-bruise recall}.
+  \item Improved \textbf{worst-ITA-group recall} --- \emph{exploratory}, never claimed.
+  \item Lower \textbf{deployment cost} --- reported separately, never traded off.
+\end{enumerate}
+
+Each arm receives exactly one automatically-assigned verdict:
+\win{REPORTABLE WIN} (non-inferior Dice \emph{and} a significant failure-endpoint gain),
+NON-INFERIOR (passes the gate, no tail gain), or \lose{INFERIOR} (fails the gate).
+
+\begin{keybox}
+This is a \textbf{non-inferiority design}. An arm is not asked to beat the reference on Dice --- at
+$n=28$ nothing can. It is asked to \emph{not lose} Dice while winning somewhere that matters.
+\end{keybox}
+
+% ===========================================================================
+\section{The techniques, one at a time}
+
+Each subsection gives the method, its exact configuration in this study, its pros and cons, and its
+result. The comparison row throughout is the \textbf{B2$\to$B0 reference}: mean Dice $0.7699$,
+median $0.8177$, $0.00\%$ complete-miss, $0.00\%$ recall$<0.10$, $1.08\%$ Dice$<0.20$,
+5th-percentile subject Dice $0.589$, small-bruise recall $0.7483$.
+
+% ------------------------------------------------------------------ response
+\subsection{Technique 1 --- Response KD (calibrated soft targets)}
+
+\textbf{What it is.} The student is trained against two targets at once: the human ground-truth
+mask, and the teacher's own probability map for the same image. The teacher's map is
+temperature-calibrated on validation first ($T=2.20$ for B5), so its confidence is honest rather
+than over-sharp.
+
+\[
+  \mathcal{L}=\alpha\,\mathrm{DiceBCE}(z_s,y)+(1-\alpha)\,\mathrm{BCE}(z_s,\sigma(z_t/T)),
+  \qquad \alpha=0.625
+\]
+
+\begin{minipage}[t]{0.475\textwidth}
+\textbf{\textcolor{proscol}{Pros}}
+\begin{itemize}[leftmargin=1.5em,itemsep=1pt,label={},labelwidth=1em,labelsep=0.4em,align=left]
+  \pro{Architecture-agnostic: needs only the teacher's output, never its internals.}
+  \pro{Cheapest possible KD --- one extra forward pass, no adapters, no feature hooks.}
+  \pro{The soft target carries the teacher's uncertainty at bruise margins, which a hard $0/1$
+       mask discards.}
+  \pro{Calibration makes that soft target trustworthy rather than over-confident.}
+\end{itemize}
+\end{minipage}\hfill%
+\begin{minipage}[t]{0.475\textwidth}
+\textbf{\textcolor{conscol}{Cons}}
+\begin{itemize}[leftmargin=1.5em,itemsep=1pt,label={},labelwidth=1em,labelsep=0.4em,align=left]
+  \con{Transfers only the final decision surface --- none of the intermediate representation.}
+  \con{Sensitive to $\alpha$, chosen on 134 validation images, so the choice is itself noisy.}
+  \con{A confidently wrong teacher is copied faithfully.}
+  \con{No explicit signal about where boundaries are.}
+\end{itemize}
+\end{minipage}
+
+\vspace{6pt}
+\textbf{Result.} Threshold $0.45$; validation mean Dice $0.7656$.
+
+\begin{center}\small
+\begin{tabular}{K q q q q q q M}
+\toprule
+& \textbf{Mean} & \textbf{Median} & \textbf{Miss} & \textbf{\%r$<$.10} & \textbf{\%D$<$.20} &
+\textbf{p5} & \textbf{Small rec.} \\
+\midrule
+Response KD & 0.7683 & 0.8061 & 0.00 & 2.16 & 2.16 & 0.616 & 0.7206 \\
+Reference   & 0.7699 & 0.8177 & 0.00 & 0.00 & 1.08 & 0.589 & 0.7483 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\textbf{Verdict: NON-INFERIOR.}
+$\Delta$ subject median Dice $=+0.0040$, CI $[-0.0092,+0.0303]$ --- passes the $-0.03$ margin.
+$\Delta$ small-bruise recall $=\lose{-0.0278}$, CI $[-0.0547,-0.0067]$ --- a significant loss.
+
+Overall Dice is preserved to within $0.002$ of the reference and complete-miss stays at zero, but
+the failure tail worsens: images the model barely finds (recall $<0.10$) rise from $0.00\%$ to
+$2.16\%$, and small-bruise recall drops significantly, $0.748\to0.721$. Swapping the 27M teacher
+for an 85M one, with no other change, bought nothing and cost small-bruise sensitivity.
+
+% ------------------------------------------------------------------ cwd
+\subsection{Technique 2 --- CWD, Channel-Wise Distillation (ICCV 2021)}
+
+\textbf{What it is.} Instead of matching outputs, CWD matches \emph{where each encoder channel
+looks}. Every channel's spatial activation map is turned into a probability distribution by a
+softmax over pixels, and the student reproduces the teacher's distribution channel by channel via
+KL divergence. Because each channel is normalised into a distribution, the comparison is
+scale-invariant --- the student's much narrower channels can still match the teacher's spatial
+attention. A $1\times1$ convolution adapter maps student channel width to teacher width at each
+encoder stage.
+
+\[
+  \mathcal{L}_{\mathrm{CWD}}=\frac{1}{S}\sum_{s=1}^{S}\frac{T^2}{C_s}\,
+  \mathrm{KL}\!\left(\mathrm{softmax}\!\left(\tfrac{f^t_s}{T}\right)\;\Big\|\;
+  \mathrm{softmax}\!\left(\tfrac{\mathrm{adapt}(f^s_s)}{T}\right)\right),\qquad T=4,\ \lambda=1.0
+\]
+
+\begin{minipage}[t]{0.475\textwidth}
+\textbf{\textcolor{proscol}{Pros}}
+\begin{itemize}[leftmargin=1.5em,itemsep=1pt,label={},labelwidth=1em,labelsep=0.4em,align=left]
+  \pro{The canonical, strongly validated baseline for segmentation KD.}
+  \pro{Scale-invariant: the $84.6$M-vs-$3.71$M magnitude gap cannot be satisfied by a trivial
+       rescaling.}
+  \pro{Transfers \emph{where} the teacher attends, which is richer than its final decision.}
+  \pro{Works well when teacher and student share an encoder family, as B5 and B0 do.}
+\end{itemize}
+\end{minipage}\hfill%
+\begin{minipage}[t]{0.475\textwidth}
+\textbf{\textcolor{conscol}{Cons}}
+\begin{itemize}[leftmargin=1.5em,itemsep=1pt,label={},labelwidth=1em,labelsep=0.4em,align=left]
+  \con{Needs the teacher's intermediate features and one trainable adapter per stage.}
+  \con{More memory per step --- micro-batch dropped from 32 to 16 here.}
+  \con{Assumes the two encoders' channels are semantically comparable, a stronger assumption than
+       it looks.}
+  \con{The loss weight is a default, not a derived value --- see the note below.}
+\end{itemize}
+\end{minipage}
+
+\vspace{4pt}
+\begin{warnbox}
+\textbf{Where these two hyperparameters come from.} Shu et al.\ (ICCV 2021,
+\texttt{arXiv:2011.13256}) state: \emph{``We set the
+temperature parameter $\mathcal{T}=4$, the loss weight $\alpha=3$ for the logits map, and
+$\alpha=50$ for the feature map for all experiments.''} They ablate $\mathcal{T}\in[1,5]$ against
+loss weights $1$/$2$/$3$ on Cityscapes validation with PSPNet-R101 $\to$ PSPNet-R18, finding
+performance stable across a range but degraded when $\mathcal{T}$ is small (a sharp map attends to
+only a few salient pixels), and select $\mathcal{T}=4$.
+
+So \textbf{$T=4$ is the paper's own ablation-selected value, not an arbitrary choice} --- though
+that ablation is a CNN pair on Cityscapes, and carrying it to a transformer pair on bruise
+photography is an untested transfer (a mild one, given the paper's stability claim).
+
+\textbf{The loss weight is the real gap.} This study applies CWD to encoder \emph{feature} maps,
+which is the setting the paper assigns $\alpha=50$; here $\lambda_{\mathrm{CWD}}=1.0$, the argparse
+default. The two are not directly comparable --- \texttt{kd\_core.cwd\_loss} normalises by
+$T^2/C_s$ and by stage count, which the paper's formulation does not --- but the value used here
+was inherited from a default rather than derived. Note also the asymmetry in the code: $T$ is
+hardcoded in \texttt{kd\_core.py} with no CLI flag, while \texttt{-{}-lambda-cwd} \emph{is}
+exposed and was left at $1.0$. The parameter with published backing is the one that cannot be
+changed; the one without it is the one that can.
+\end{warnbox}
+
+\vspace{4pt}
+\textbf{Result.} Threshold $0.60$; validation mean Dice $0.7625$.
+
+\begin{center}\small
+\begin{tabular}{K q q q q q q M}
+\toprule
+& \textbf{Mean} & \textbf{Median} & \textbf{Miss} & \textbf{\%r$<$.10} & \textbf{\%D$<$.20} &
+\textbf{p5} & \textbf{Small rec.} \\
+\midrule
+CWD       & 0.7736 & 0.8230 & 0.54 & 2.16 & 2.16 & \textbf{0.650} & 0.7523 \\
+Reference & 0.7699 & 0.8177 & 0.00 & 0.00 & 1.08 & 0.589 & 0.7483 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\textbf{Verdict: NON-INFERIOR.}
+$\Delta$ subject median Dice $=+0.0068$, CI $[-0.0118,+0.0387]$.
+$\Delta$ small-bruise recall $=+0.0039$, CI $[-0.0526,+0.0490]$ --- no reliable change.
+
+CWD posts the second-best mean Dice of any arm and the \textbf{best 5th-percentile subject Dice in
+the whole study} ($0.650$), meaning its worst subjects are the least bad. Its median Dice is within
+$0.005$ of the $84.6$M B5 teacher. The cost is one complete miss the reference did not have and a
+low-recall tail of $2.16\%$. Nothing on the failure endpoints moves reliably, so it compresses
+without loss but does not win.
+
+% ------------------------------------------------------------------ bpkd
+\subsection{Technique 3 --- BPKD, Boundary-Privileged KD (WACV 2024)}
+
+\textbf{What it is.} BPKD splits the image into a \emph{boundary band} (pixels whose local
+neighbourhood contains both bruise and skin, found by a $5\times5$ morphological gradient of the
+ground-truth mask) and the \emph{body} (everything else), and distils the teacher's probabilities
+separately on each, weighting the boundary $4\times$ more heavily. The motivation is
+task-specific: bruise margins are diffuse and irregular, with no sharp edge to lock onto, so edge
+behaviour is where a small student has least capacity and most to gain.
+
+\[
+  \mathcal{L}_{\mathrm{BPKD}}
+  =\lambda_{e}\!\cdot\!\frac{\sum \mathrm{BCE}\cdot\mathbf{1}[\text{edge}]}{\sum\mathbf{1}[\text{edge}]}
+  +\lambda_{b}\!\cdot\!\frac{\sum \mathrm{BCE}\cdot(1-\mathbf{1}[\text{edge}])}
+       {\sum(1-\mathbf{1}[\text{edge}])},
+  \qquad \lambda_e=4.0,\ \lambda_b=1.0
+\]
+
+\begin{minipage}[t]{0.475\textwidth}
+\textbf{\textcolor{proscol}{Pros}}
+\begin{itemize}[leftmargin=1.5em,itemsep=1pt,label={},labelwidth=1em,labelsep=0.4em,align=left]
+  \pro{Directly targets the weakest part of a bruise mask --- its outline.}
+  \pro{Cheap: the band is computed with max-pooling on GPU, no external library.}
+  \pro{Uses only the teacher's output --- no adapters, no feature access.}
+  \pro{Shares its edge definition with the boundary ablation, keeping the two consistent.}
+\end{itemize}
+\end{minipage}\hfill%
+\begin{minipage}[t]{0.475\textwidth}
+\textbf{\textcolor{conscol}{Cons}}
+\begin{itemize}[leftmargin=1.5em,itemsep=1pt,label={},labelwidth=1em,labelsep=0.4em,align=left]
+  \con{The band comes from the ground truth --- which is the noisiest part of the annotation
+       (human--human agreement $0.639$).}
+  \con{Two extra hyperparameters (band width 5, edge weight 4.0), both fixed rather than tuned.}
+  \con{Emphasising the edge implicitly de-emphasises detecting the bruise at all.}
+  \con{Published for sharp-boundary scene parsing, not diffuse medical margins.}
+\end{itemize}
+\end{minipage}
+
+\vspace{6pt}
+\textbf{Result.} Threshold $0.50$; validation mean Dice $0.7565$.
+
+\begin{center}\small
+\begin{tabular}{K q q q q q q M}
+\toprule
+& \textbf{Mean} & \textbf{Median} & \textbf{Miss} & \textbf{\%r$<$.10} & \textbf{\%D$<$.20} &
+\textbf{p5} & \textbf{Small rec.} \\
+\midrule
+BPKD      & 0.7651 & 0.8091 & 0.54 & 1.08 & 1.62 & 0.589 & 0.7280 \\
+Reference & 0.7699 & 0.8177 & 0.00 & 0.00 & 1.08 & 0.589 & 0.7483 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\textbf{Verdict: NON-INFERIOR.}
+$\Delta$ subject median Dice $=-0.0037$, CI $[-0.0240,+0.0308]$.
+$\Delta$ small-bruise recall $=-0.0203$, CI $[-0.0803,+0.0436]$ --- not reliable.
+
+Dice is preserved and nothing improves. The plausible explanation is that the ground-truth
+boundary is precisely where the three annotators disagree most, so the $4\times$ weight is partly
+spent fitting label noise rather than teacher knowledge.
+
+% ------------------------------------------------------------------ angular
+\subsection{Technique 4 --- Angular feature distillation (WACV 2024)}
+
+\textbf{What it is.} At every pixel an encoder stage produces a vector across its channels.
+Angular distillation asks the student to match the \emph{direction} of that vector --- its cosine
+similarity to the teacher's --- and ignore its length entirely. The reasoning is that an $84.6$M
+teacher and a $3.71$M student produce activations of very different magnitude, so any loss
+comparing magnitudes can be minimised by learning a scale factor instead of the representation.
+
+\[
+  \mathcal{L}_{\mathrm{ang}}=\frac{1}{S}\sum_{s=1}^{S}
+  \mathbb{E}_{\text{pixels}}\Big[1-\cos\big(\mathrm{adapt}(f^s_s),\,f^t_s\big)\Big],
+  \qquad \lambda=1.0
+\]
+
+\begin{minipage}[t]{0.475\textwidth}
+\textbf{\textcolor{proscol}{Pros}}
+\begin{itemize}[leftmargin=1.5em,itemsep=1pt,label={},labelwidth=1em,labelsep=0.4em,align=left]
+  \pro{Immune to the magnitude gap by construction --- exactly the failure it was designed to
+       avoid.}
+  \pro{Very cheap and numerically stable; no temperature, no softmax over pixels.}
+  \pro{A different, complementary signal to CWD, which normalises spatially rather than
+       per-pixel.}
+\end{itemize}
+\end{minipage}\hfill%
+\begin{minipage}[t]{0.475\textwidth}
+\textbf{\textcolor{conscol}{Cons}}
+\begin{itemize}[leftmargin=1.5em,itemsep=1pt,label={},labelwidth=1em,labelsep=0.4em,align=left]
+  \con{Discards magnitude, which in a segmentation encoder also carries confidence.}
+  \con{Assumes the channel spaces correspond after a linear adapter --- fragile across a
+       $22\times$ width gap.}
+  \con{The adapter must learn the correspondence \emph{and} the direction match at once.}
+  \con{No explicit signal about the segmentation decision itself.}
+\end{itemize}
+\end{minipage}
+
+\vspace{6pt}
+\textbf{Result.} Threshold $0.65$; validation mean Dice $0.7730$ --- the \emph{highest} of any arm.
+
+\begin{center}\small
+\begin{tabular}{K q q q q q q M}
+\toprule
+& \textbf{Mean} & \textbf{Median} & \textbf{Miss} & \textbf{\%r$<$.10} & \textbf{\%D$<$.20} &
+\textbf{p5} & \textbf{Small rec.} \\
+\midrule
+Angular   & \lose{0.7418} & 0.8043 & 0.54 & 2.16 & 3.24 & 0.549 & \lose{0.6949} \\
+Reference & 0.7699 & 0.8177 & 0.00 & 0.00 & 1.08 & 0.589 & 0.7483 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\textbf{Verdict: \lose{INFERIOR}.}
+$\Delta$ subject median Dice $=-0.0321$, CI $[-0.0651,+0.0027]$ --- lower bound $-0.065$, more than
+twice the allowed margin. $\Delta$ small-bruise recall $=\lose{-0.0535}$, CI $[-0.1105,-0.0112]$
+--- a significant loss.
+
+Matching feature direction across a $22\times$ width gap actively hurt; the most likely explanation
+is that the two feature spaces do not correspond, so the adapter fits a mapping that does not
+exist. Note also that this arm had the \emph{best validation Dice of the entire study} and the
+worst single-teacher test result --- a concrete demonstration of how unreliable validation-based
+selection is at this sample size.
+
+% ------------------------------------------------------------------ dkd
+\subsection{Technique 5 --- DKD, Decoupled KD (CVPR 2022) --- not completed}
+
+\textbf{What it is.} DKD splits the classical soft-target loss into Target-Class KD (how much
+probability mass the teacher places on the correct class) and Non-Target KD (the structure of the
+teacher's belief across the remaining classes), weighting them independently:
+$\mathcal{L}_{\mathrm{DKD}}=\mathrm{TCKD}+\beta\,\mathrm{NCKD}$, here $\beta=2.0$, $T=4$.
+
+In this project the task is binary --- bruise versus skin --- so the per-pixel distribution is
+built as two logits $[0,z]$. That leaves exactly \emph{one} non-target class, and the NCKD term
+degenerates to almost nothing; the implementation retains it only for formula completeness.
+
+\begin{minipage}[t]{0.475\textwidth}
+\textbf{\textcolor{proscol}{Pros}}
+\begin{itemize}[leftmargin=1.5em,itemsep=1pt,label={},labelwidth=1em,labelsep=0.4em,align=left]
+  \pro{A well-validated, highly cited reformulation of classical KD.}
+  \pro{Lets target and structural components be weighted independently.}
+  \pro{Cheap --- needs only the teacher's logits, like response KD.}
+\end{itemize}
+\end{minipage}\hfill%
+\begin{minipage}[t]{0.475\textwidth}
+\textbf{\textcolor{conscol}{Cons}}
+\begin{itemize}[leftmargin=1.5em,itemsep=1pt,label={},labelwidth=1em,labelsep=0.4em,align=left]
+  \con{Designed for many-class classification; binary segmentation has no non-target structure to
+       transfer.}
+  \con{Effectively collapses to a reweighted response KD.}
+  \con{$\beta$ has no principled setting in the degenerate binary case.}
+\end{itemize}
+\end{minipage}
+
+\begin{warnbox}
+\textbf{Status: not completed.} \texttt{distill\_out/x\_dkd\_b5\_to\_b0/} contains only
+\texttt{run\_config.json} --- no checkpoint, no per-image CSV, no \texttt{DONE.json}, and no entry
+in the aggregate report. This arm therefore appears in \emph{no} results table. It was flagged as
+low priority in advance for the reason above, and nothing in the study's conclusions depends on it.
+Either re-run it or drop it explicitly from any write-up; do not leave it ambiguous.
+\end{warnbox}
+
+% ------------------------------------------------------------------ uniform
+\subsection{Technique 6 --- Uniform two-teacher ensemble (the control)}
+
+\textbf{What it is.} Both teachers run on every training image; their calibrated probability maps
+are averaged pixel by pixel and the student is distilled from that single averaged target using the
+same response loss as Technique 1.
+
+\[
+  p_{\text{target}} = \tfrac{1}{2}\,p_{B2} + \tfrac{1}{2}\,p_{B5},
+  \qquad \alpha = 0.95
+\]
+
+This is the obvious way to use two teachers, and it is included specifically as a
+\textbf{control}: it holds the teachers, the loss, $\alpha$, the seed, the student and the
+evaluation fixed and varies \emph{only} the fusion rule. Any difference between this arm and
+Technique 7 is attributable to the fusion rule alone.
+
+\begin{minipage}[t]{0.475\textwidth}
+\textbf{\textcolor{proscol}{Pros}}
+\begin{itemize}[leftmargin=1.5em,itemsep=1pt,label={},labelwidth=1em,labelsep=0.4em,align=left]
+  \pro{Trivial to implement and completely assumption-free.}
+  \pro{Averaging suppresses independent teacher noise where the two agree.}
+  \pro{Gives a smoother, lower-variance target than either teacher alone.}
+  \pro{Provides exactly the control needed to isolate the gating mechanism.}
+\end{itemize}
+\end{minipage}\hfill%
+\begin{minipage}[t]{0.475\textwidth}
+\textbf{\textcolor{conscol}{Cons}}
+\begin{itemize}[leftmargin=1.5em,itemsep=1pt,label={},labelwidth=1em,labelsep=0.4em,align=left]
+  \con{Where the teachers disagree, the average lands near $0.5$ --- maximally uninformative on
+       exactly the hard pixels.}
+  \con{Treats a confident teacher and an uncertain one as equally credible.}
+  \con{Discards the validation evidence that B5 is the more reliable of the two.}
+  \con{Two teacher forward passes per step --- the full cost of the adaptive arm with none of its
+       selectivity.}
+\end{itemize}
+\end{minipage}
+
+\vspace{6pt}
+\textbf{Result.} Threshold $0.25$; validation mean Dice $0.7608$.
+
+\begin{center}\small
+\begin{tabular}{K q q q q q q M}
+\toprule
+& \textbf{Mean} & \textbf{Median} & \textbf{Miss} & \textbf{\%r$<$.10} & \textbf{\%D$<$.20} &
+\textbf{p5} & \textbf{Small rec.} \\
+\midrule
+Uniform ensemble & 0.7615 & 0.8139 & 0.00 & 1.62 & 1.62 & \lose{0.515} & 0.7463 \\
+Reference        & 0.7699 & 0.8177 & 0.00 & 0.00 & 1.08 & 0.589 & 0.7483 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\textbf{Verdict: \lose{INFERIOR}.}
+$\Delta$ subject median Dice $=-0.0016$, CI $[-0.0306,+0.0263]$ --- lower bound $-0.031$, failing
+the $-0.030$ margin by a hair. $\Delta$ small-bruise recall $=-0.0021$, CI $[-0.0486,+0.0261]$.
+
+Complete-miss stays at zero, but the arm fails the primary gate and posts the \textbf{lowest
+5th-percentile subject Dice of any arm} ($0.515$) --- its worst subjects are the worst in the
+study. Adding a second, larger teacher this way bought nothing while doubling the teacher cost of
+every training step.
+
+\begin{keybox}
+Averaging two \emph{complementary} teachers destroys the disagreement that made them
+complementary. This is the control that gives Technique 7 its meaning.
+\end{keybox}
+
+% ------------------------------------------------------------------ adaptive
+\subsection{Technique 7 --- Reliability-gated two-teacher fusion (the novel method)}
+
+\textbf{What it is.} Rather than averaging, the two teachers are combined \emph{pixel by pixel},
+weighted by how confident each is at that pixel. Confidence is distance from $0.5$: where the
+teachers agree either may be followed, and where they disagree the student follows the one that is
+actually committed. That per-pixel weight is then biased by the single scalar
+$\mathrm{rel}_b=0.634$ fitted on validation (\S\ref{sec:oracle}) --- the measured relative
+reliability of B5 against B2. The gate therefore combines \emph{local} per-pixel evidence with a
+\emph{global} validation-derived prior.
+
+\begin{align*}
+  w_0 &= \frac{|p_{B5}-\tfrac12|}{|p_{B2}-\tfrac12| + |p_{B5}-\tfrac12|}
+         &&\text{(per-pixel confidence share of B5)}\\[3pt]
+  w   &= \frac{w_0\,\mathrm{rel}_b}{w_0\,\mathrm{rel}_b + (1-w_0)(1-\mathrm{rel}_b)}
+         &&\text{(bias by the validation reliability)}\\[3pt]
+  p_{\text{target}} &= w\,p_{B5} + (1-w)\,p_{B2}, \qquad \alpha = 0.95
+\end{align*}
+
+\begin{minipage}[t]{0.475\textwidth}
+\textbf{\textcolor{proscol}{Pros}}
+\begin{itemize}[leftmargin=1.5em,itemsep=1pt,label={},labelwidth=1em,labelsep=0.4em,align=left]
+  \pro{Preserves teacher disagreement instead of averaging it away --- hard pixels stay
+       informative.}
+  \pro{\textbf{Leak-free by construction}: uses only teacher outputs and one scalar fitted on
+       validation. Never touches labels, skin-tone labels, or the test set.}
+  \pro{The scalar is \emph{measured}, not tuned --- it comes from the same validation oracle that
+       authorised running multi-teacher arms at all.}
+  \pro{No extra parameters and no adapters; identical cost to the uniform ensemble.}
+\end{itemize}
+\end{minipage}\hfill%
+\begin{minipage}[t]{0.475\textwidth}
+\textbf{\textcolor{conscol}{Cons}}
+\begin{itemize}[leftmargin=1.5em,itemsep=1pt,label={},labelwidth=1em,labelsep=0.4em,align=left]
+  \con{Confidence is not correctness --- a teacher can be confidently wrong, and the gate will
+       follow it.}
+  \con{$\mathrm{rel}_b$ is a single global scalar; a per-region or per-difficulty estimate would
+       be finer but needs more validation data.}
+  \con{Requires two teacher forward passes per training step.}
+  \con{Estimated from 134 validation images, so $\mathrm{rel}_b$ itself carries uncertainty.}
+\end{itemize}
+\end{minipage}
+
+\vspace{6pt}
+\textbf{Result.} Threshold $0.55$; validation mean Dice $0.7610$.
+
+\begin{center}\small
+\begin{tabular}{K q q q q q q M}
+\toprule
+& \textbf{Mean} & \textbf{Median} & \textbf{Miss} & \textbf{\%r$<$.10} & \textbf{\%D$<$.20} &
+\textbf{p5} & \textbf{Small rec.} \\
+\midrule
+\win{Reliability-gated} & \win{0.7748} & 0.8172 & \textbf{0.00} & 1.08 & 1.08 & 0.623 &
+  \win{0.8010} \\
+Reference               & 0.7699 & 0.8177 & 0.00 & 0.00 & 1.08 & 0.589 & 0.7483 \\
+B5 teacher (84.6M)      & 0.7727 & 0.8273 & 0.00 & 0.00 & 0.00 & 0.544 & 0.7909 \\
+B2 teacher (27.4M)      & 0.7709 & 0.8202 & 0.00 & 0.00 & 0.54 & 0.562 & 0.7475 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\textbf{Verdict: \win{REPORTABLE WIN}.}
+$\Delta$ subject median Dice $=+0.0062$, CI $[-0.0164,+0.0355]$ --- passes the margin.
+$\Delta$ small-bruise recall $=\win{+0.0527}$, CI $[+0.0213,+0.0761]$, $P(\Delta>0)=0.996$.
+
+Four things make this the study's only win:
+
+\begin{enumerate}[leftmargin=1.6em,itemsep=3pt]
+  \item It is the \textbf{only arm whose small-bruise recall interval clears zero}:
+        $0.748\to0.801$, a $5.3$-point gain on the hardest third of the test set.
+  \item Its small-bruise recall ($0.801$) is \emph{higher than the $84.6$M B5 teacher's} ($0.791$)
+        and far above the $27.4$M B2 teacher's ($0.748$) --- at $23\times$ and $7.4\times$ fewer
+        parameters respectively.
+  \item At $3.71$M parameters its mean Dice ($0.7748$) is the highest of every model in this
+        report, teachers included, under the same locked evaluation.
+  \item Complete-miss stays at $0.00\%$, and its 5th-percentile subject Dice ($0.623$) is well
+        above both teachers' ($0.544$, $0.562$) --- the tail floor improves, not just the centre.
+\end{enumerate}
+
+% ------------------------------------------------------------------ boundary
+\subsection{Technique 8 --- Gate $+$ boundary weighting}
+
+\textbf{What it is.} The first of four ablations, each adding exactly one component to the winning
+gate so that any change is attributable. This one re-weights the loss per pixel: pixels on the
+ground-truth boundary band count $5\times$ as much as interior pixels, reusing BPKD's $5\times5$
+edge definition. The difference from BPKD proper is structural --- BPKD splits the loss into two
+separately-normalised terms, this weights a single term.
+
+\[
+  w(\mathbf{x}) = 1 + \beta\cdot\mathbf{1}[\mathbf{x}\in\text{edge band}],\qquad \beta=4.0
+\]
+
+\begin{minipage}[t]{0.475\textwidth}
+\textbf{\textcolor{proscol}{Pros}}
+\begin{itemize}[leftmargin=1.5em,itemsep=1pt,label={},labelwidth=1em,labelsep=0.4em,align=left]
+  \pro{A single-component change on top of the winner --- clean attribution.}
+  \pro{Targets bruise margins, where the compact student is least accurate.}
+  \pro{Free: reuses machinery already written for BPKD.}
+  \pro{Keeps complete-miss at zero.}
+\end{itemize}
+\end{minipage}\hfill%
+\begin{minipage}[t]{0.475\textwidth}
+\textbf{\textcolor{conscol}{Cons}}
+\begin{itemize}[leftmargin=1.5em,itemsep=1pt,label={},labelwidth=1em,labelsep=0.4em,align=left]
+  \con{Concentrates learning where annotators disagree most.}
+  \con{Trades detection signal for delineation signal --- the wrong trade if the goal is finding
+       bruises at all.}
+  \con{Two more untuned hyperparameters on top of an already-selected method.}
+\end{itemize}
+\end{minipage}
+
+\vspace{6pt}
+\textbf{Result.} Threshold $0.45$; validation mean Dice $0.7583$.
+
+\begin{center}\small
+\begin{tabular}{K q q q q q q M}
+\toprule
+& \textbf{Mean} & \textbf{Median} & \textbf{Miss} & \textbf{\%r$<$.10} & \textbf{\%D$<$.20} &
+\textbf{p5} & \textbf{Small rec.} \\
+\midrule
+Gate $+$ boundary & 0.7668 & 0.8221 & 0.00 & 2.16 & 2.70 & 0.606 & 0.7386 \\
+Plain gate        & 0.7748 & 0.8172 & 0.00 & 1.08 & 1.08 & 0.623 & 0.8010 \\
+Reference         & 0.7699 & 0.8177 & 0.00 & 0.00 & 1.08 & 0.589 & 0.7483 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\textbf{Verdict: NON-INFERIOR.}
+$\Delta$ subject median Dice $=-0.0015$, CI $[-0.0218,+0.0313]$.
+$\Delta$ small-bruise recall $=-0.0098$, CI $[-0.0830,+0.0389]$.
+
+The gate's win disappears. Small-bruise recall falls $0.801\to0.739$, below even the reference;
+mean Dice drops $0.008$; the low-recall tail doubles. Median Dice rises slightly ($0.8221$), so the
+boundaries the model \emph{does} draw are marginally better --- the component did what it was
+designed to do, and that turned out to be the wrong objective.
+
+% ------------------------------------------------------------------ hard
+\subsection{Technique 9 --- Gate $+$ hard-example weighting}
+
+\textbf{What it is.} Up-weights the pixels and images the project's failure analysis flags as
+risky. Three signals combine into one per-pixel weight: teacher-confident foreground
+(complete-miss risk), teacher uncertainty near $0.5$ (boundary and ambiguity), and a global
+$2\times$ multiplier for any image whose bruise covers less than $2\%$ of the frame (small-bruise
+risk). It is estimated from the teacher and the training masks only.
+
+\[
+  w = \Big[1+\gamma\big(\tfrac12 p_t + \tfrac12(1-2|p_t-\tfrac12|)\big)\Big]
+      \cdot\Big[1+\mathbf{1}[\text{area}<0.02]\Big],\qquad \gamma=2.0
+\]
+
+so $w$ ranges roughly $1\to6$.
+
+\begin{minipage}[t]{0.475\textwidth}
+\textbf{\textcolor{proscol}{Pros}}
+\begin{itemize}[leftmargin=1.5em,itemsep=1pt,label={},labelwidth=1em,labelsep=0.4em,align=left]
+  \pro{Attacks the exact endpoints the success hierarchy is built around.}
+  \pro{The small-bruise multiplier is a direct, literal encoding of endpoint 3.}
+  \pro{Costs nothing at inference time.}
+  \pro{Derived only from teacher outputs and training labels --- leak-free.}
+\end{itemize}
+\end{minipage}\hfill%
+\begin{minipage}[t]{0.475\textwidth}
+\textbf{\textcolor{conscol}{Cons}}
+\begin{itemize}[leftmargin=1.5em,itemsep=1pt,label={},labelwidth=1em,labelsep=0.4em,align=left]
+  \con{Three heuristics multiplied together, none individually validated.}
+  \con{Up-weighting uncertain pixels means up-weighting the teacher's \emph{least reliable}
+       predictions.}
+  \con{A $1\to6$ weight range is aggressive enough to reshape the whole loss landscape.}
+  \con{$\gamma=2.0$ and the $2\%$ area threshold were fixed by hand, not searched.}
+\end{itemize}
+\end{minipage}
+
+\vspace{6pt}
+\textbf{Result.} Threshold $0.40$; validation mean Dice $0.7562$.
+
+\begin{center}\small
+\begin{tabular}{K q q q q q q M}
+\toprule
+& \textbf{Mean} & \textbf{Median} & \textbf{Miss} & \textbf{\%r$<$.10} & \textbf{\%D$<$.20} &
+\textbf{p5} & \textbf{Small rec.} \\
+\midrule
+Gate $+$ hard & \lose{0.7414} & 0.8023 & 0.00 & 2.16 & 3.24 & \lose{0.509} & 0.7246 \\
+Plain gate    & 0.7748 & 0.8172 & 0.00 & 1.08 & 1.08 & 0.623 & 0.8010 \\
+Reference     & 0.7699 & 0.8177 & 0.00 & 0.00 & 1.08 & 0.589 & 0.7483 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\textbf{Verdict: \lose{INFERIOR}.}
+$\Delta$ subject median Dice $=-0.0275$, CI $[-0.0519,+0.0072]$ --- lower bound $-0.052$, failing
+the margin. $\Delta$ small-bruise recall $=-0.0237$, CI $[-0.0576,+0.0187]$.
+
+This is the \textbf{worst mean Dice in the study}. The endpoint the arm was explicitly designed to
+raise --- small-bruise recall --- \emph{fell} from $0.801$ to $0.725$ despite the $2\times$
+small-bruise multiplier. Explicitly optimising for the failure endpoints made every failure
+endpoint worse; the most plausible mechanism is that a $1\to6$ weight range overwhelms the
+supervised DiceBCE term.
+
+% ------------------------------------------------------------------ group
+\subsection{Technique 10 --- Gate $+$ worst-group (skin-tone) loss}
+
+\textbf{What it is.} A distributionally-robust term. Each training image carries an ITA skin-tone
+group index (five bins, Light to Dark). Within every mini-batch the supervised loss is computed
+separately per group and \emph{only the worst group's loss} is used, so optimisation always pushes
+on whichever skin tone the model currently handles least well.
+
+\[
+  \mathcal{L}_{\text{group}}=\max_{g\in\text{batch}}\ \mathrm{DiceBCE}(z_s|_g,\ y|_g),
+  \qquad \lambda_{\text{group}}=0.5
+\]
+
+\begin{minipage}[t]{0.475\textwidth}
+\textbf{\textcolor{proscol}{Pros}}
+\begin{itemize}[leftmargin=1.5em,itemsep=1pt,label={},labelwidth=1em,labelsep=0.4em,align=left]
+  \pro{Directly addresses a documented equity concern in bruise imaging.}
+  \pro{Uses per-image ITA labels that already exist for both splits.}
+  \pro{A max-over-groups objective is the standard, principled formulation.}
+  \pro{Costs nothing at inference time.}
+\end{itemize}
+\end{minipage}\hfill%
+\begin{minipage}[t]{0.475\textwidth}
+\textbf{\textcolor{conscol}{Cons}}
+\begin{itemize}[leftmargin=1.5em,itemsep=1pt,label={},labelwidth=1em,labelsep=0.4em,align=left]
+  \con{A batch of 32 rarely holds all five groups, so the ``worst group'' is estimated from a
+       small, unstable sample each step.}
+  \con{Optimising a max is high-variance by nature.}
+  \con{Skin tone is not clean at subject level --- 20 of 28 test subjects span more than one ITA
+       group.}
+  \con{Endpoint 4 is exploratory, so even a gain here could not have been claimed.}
+\end{itemize}
+\end{minipage}
+
+\vspace{6pt}
+\textbf{Result.} Threshold $0.55$; validation mean Dice $0.7538$.
+
+\begin{center}\small
+\begin{tabular}{K q q q q q q M}
+\toprule
+& \textbf{Mean} & \textbf{Median} & \textbf{Miss} & \textbf{\%r$<$.10} & \textbf{\%D$<$.20} &
+\textbf{p5} & \textbf{Small rec.} \\
+\midrule
+Gate $+$ group & 0.7586 & 0.8047 & 0.54 & 1.08 & 2.16 & 0.636 & 0.7420 \\
+Plain gate     & 0.7748 & 0.8172 & 0.00 & 1.08 & 1.08 & 0.623 & 0.8010 \\
+Reference      & 0.7699 & 0.8177 & 0.00 & 0.00 & 1.08 & 0.589 & 0.7483 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\textbf{Verdict: \lose{INFERIOR}.}
+$\Delta$ subject median Dice $=-0.0182$, CI $[-0.0367,+0.0120]$ --- lower bound $-0.037$.
+$\Delta$ worst-group recall $=-0.0137$, CI $[-0.0946,+0.0273]$.
+
+Worst-group recall --- the endpoint this arm exists to improve --- is $0.672$, against $0.698$ for
+the plain gate: it moved in the wrong direction. The one metric that holds up is the 5th-percentile
+subject Dice ($0.636$), consistent with a robust objective flattening the tail while lowering the
+mean. With 9--17 subjects per ITA group, the worst-group signal is too noisy to optimise against.
+
+% ------------------------------------------------------------------ full
+\subsection{Technique 11 --- Gate $+$ full combination}
+
+\textbf{What it is.} All three add-ons switched on at once, on top of the reliability gate. This is
+the configuration the project's own planning document (\texttt{docs/b5\_distillation\_scope.md})
+nominated as the \emph{recommended headline experiment}: group- and failure-aware distillation from
+a large teacher. It tests whether components that individually cost a little might combine into
+something that gains, and it closes the ablation ladder.
+
+\begin{minipage}[t]{0.475\textwidth}
+\textbf{\textcolor{proscol}{Pros}}
+\begin{itemize}[leftmargin=1.5em,itemsep=1pt,label={},labelwidth=1em,labelsep=0.4em,align=left]
+  \pro{Tests interaction effects single-component ablations cannot reveal.}
+  \pro{Completes the ladder, bounding each component's effect from both ends.}
+  \pro{Running the pre-specified headline configuration closes the question honestly rather than
+       quietly dropping it.}
+\end{itemize}
+\end{minipage}\hfill%
+\begin{minipage}[t]{0.475\textwidth}
+\textbf{\textcolor{conscol}{Cons}}
+\begin{itemize}[leftmargin=1.5em,itemsep=1pt,label={},labelwidth=1em,labelsep=0.4em,align=left]
+  \con{Three multiplicative weightings compound; the effective weight on some pixels becomes very
+       large.}
+  \con{Cannot attribute any outcome to any single cause.}
+  \con{Every component had already been shown to cost accuracy alone.}
+  \con{Maximum hyperparameter surface, none of it jointly tuned.}
+\end{itemize}
+\end{minipage}
+
+\vspace{6pt}
+\textbf{Result.} Threshold $0.50$; validation mean Dice $0.7564$.
+
+\begin{center}\small
+\begin{tabular}{K q q q q q q M}
+\toprule
+& \textbf{Mean} & \textbf{Median} & \textbf{Miss} & \textbf{\%r$<$.10} & \textbf{\%D$<$.20} &
+\textbf{p5} & \textbf{Small rec.} \\
+\midrule
+Gate $+$ full & 0.7515 & \lose{0.7984} & \lose{1.08} & \lose{2.70} & 2.70 & 0.587 &
+  \lose{0.6723} \\
+Plain gate    & 0.7748 & 0.8172 & 0.00 & 1.08 & 1.08 & 0.623 & 0.8010 \\
+Reference     & 0.7699 & 0.8177 & 0.00 & 0.00 & 1.08 & 0.589 & 0.7483 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\textbf{Verdict: \lose{INFERIOR}.}
+$\Delta$ subject median Dice $=-0.0244$, CI $[-0.0424,+0.0114]$ --- lower bound $-0.042$.
+$\Delta$ small-bruise recall $=\lose{-0.0760}$, CI $[-0.1283,-0.0180]$ --- \textbf{the largest
+significant loss in the study}.
+
+The worst arm on almost every endpoint simultaneously: lowest median Dice, highest complete-miss
+(two blank predictions), highest low-recall tail, and a $13$-point small-bruise recall loss against
+the plain gate. The three components do not cancel; they compound.
+
+\begin{keybox}
+The configuration the plan expected to win is the worst arm in the study. The \textbf{plain
+reliability gate, with nothing added}, is the method that works. This is exactly why components are
+ablated one at a time rather than shipped together.
+\end{keybox}
+
+% ===========================================================================
+\section{Consolidated results}
+
+\subsection{All arms, one table}
+
+\begin{center}\footnotesize
+\setlength{\tabcolsep}{3pt}
+\begin{tabular}{>{\raggedright\arraybackslash}p{3.5cm} m m m m m m m >{\raggedright\arraybackslash}p{3.0cm}}
+\toprule
+\textbf{Model / arm} & \textbf{Mean} & \textbf{Med.} & \textbf{Miss} & \textbf{\%r} &
+\textbf{\%D} & \textbf{p5} & \textbf{Small} & \textbf{Verdict} \\
+ & Dice & Dice & (\%) & $<$.10 & $<$.20 & subj & recall & \\
+\midrule
+SegFormer-B5 teacher (84.6M) & 0.7727 & \textbf{0.8273} & 0.00 & 0.00 & 0.00 & 0.544 & 0.7909 &
+  \emph{teacher} \\
+CWD                          & 0.7736 & 0.8230 & 0.54 & 2.16 & 2.16 & \textbf{0.650} & 0.7523 &
+  NON-INFERIOR \\
+Gate $+$ boundary            & 0.7668 & 0.8221 & 0.00 & 2.16 & 2.70 & 0.606 & 0.7386 &
+  NON-INFERIOR \\
+SegFormer-B2 teacher (27.4M) & 0.7709 & 0.8202 & 0.00 & 0.00 & 0.54 & 0.562 & 0.7475 &
+  \emph{teacher} \\
+B2$\to$B0 reference (3.7M)   & 0.7699 & 0.8177 & 0.00 & 0.00 & 1.08 & 0.589 & 0.7483 &
+  \emph{reference} \\
+\win{Reliability-gated}      & \win{0.7748} & 0.8172 & 0.00 & 1.08 & 1.08 & 0.623 &
+  \win{0.8010} & \win{REPORTABLE WIN} \\
+Uniform ensemble             & 0.7615 & 0.8139 & 0.00 & 1.62 & 1.62 & \lose{0.515} & 0.7463 &
+  \lose{INFERIOR} \\
+BPKD                         & 0.7651 & 0.8091 & 0.54 & 1.08 & 1.62 & 0.589 & 0.7280 &
+  NON-INFERIOR \\
+Response KD                  & 0.7683 & 0.8061 & 0.00 & 2.16 & 2.16 & 0.616 & 0.7206 &
+  NON-INFERIOR \\
+Gate $+$ group               & 0.7586 & 0.8047 & 0.54 & 1.08 & 2.16 & 0.636 & 0.7420 &
+  \lose{INFERIOR} \\
+Angular                      & 0.7418 & 0.8043 & 0.54 & 2.16 & 3.24 & 0.549 & \lose{0.6949} &
+  \lose{INFERIOR} \\
+Gate $+$ hard                & \lose{0.7414} & 0.8023 & 0.00 & 2.16 & 3.24 & \lose{0.509} &
+  0.7246 & \lose{INFERIOR} \\
+Gate $+$ full                & 0.7515 & \lose{0.7984} & \lose{1.08} & 2.70 & 2.70 & 0.587 &
+  \lose{0.6723} & \lose{INFERIOR} \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\tabnote{Locked re-evaluation, 185 images, single seed (42) per arm; teachers and reference
+re-scored by the same code path. Sorted by median Dice. DKD is absent because it did not complete.}
+
+\begin{figure}[H]\centering
+\includegraphics[width=0.95\textwidth]{figures_distill/f2_arms_dice.png}
+\caption{Mean Dice by arm, coloured by verdict rather than by score. Note that the winner is
+\emph{not} the arm with the best median Dice --- the verdict comes from the confidence interval and
+the failure endpoints, not the point estimate.}
+\end{figure}
+
+\subsection{Primary gate: subject-level Dice}
+
+\begin{figure}[H]\centering
+\includegraphics[width=0.95\textwidth]{figures_distill/f3_primary_gate.png}
+\caption{Paired subject-cluster bootstrap, $B=5000$, against the B2$\to$B0 reference. An arm passes
+only if the lower bound clears $-0.03$. \textbf{Every interval spans zero} --- at 28 subjects
+nothing separates on Dice, which is precisely why the study is judged on the tail.}
+\end{figure}
+
+\subsection{The endpoint that moved: small-bruise recall}
+
+\begin{figure}[H]\centering
+\includegraphics[width=0.95\textwidth]{figures_distill/f4_small_recall.png}
+\caption{$\Delta$ recall on the 62 smallest-lesion images. Exactly one interval clears zero: the
+plain reliability gate, $+0.053$ $[+0.021,+0.076]$.}
+\end{figure}
+
+\subsection{Full bootstrap output}
+
+\begin{center}\footnotesize
+\setlength{\tabcolsep}{3pt}
+\begin{tabular}{>{\raggedright\arraybackslash}p{2.85cm} W W W}
+\toprule
+\textbf{Arm} & $\Delta$ \textbf{subj. median Dice} & $\Delta$ \textbf{small recall} &
+$\Delta$ \textbf{worst-group recall} \\
+ & [95\% CI] & [95\% CI] & [95\% CI] \\
+\midrule
+\win{Reliability-gated} & $+0.0062\ [-0.016,+0.036]$ & \win{$+0.0527\ [+0.021,+0.076]$} &
+  $+0.0417\ [-0.041,+0.090]$ \\
+CWD & $+0.0068\ [-0.012,+0.039]$ & $+0.0039\ [-0.053,+0.049]$ & $+0.0318\ [-0.101,+0.089]$ \\
+Response KD & $+0.0040\ [-0.009,+0.030]$ & \lose{$-0.0278\ [-0.055,-0.007]$} &
+  $-0.0159\ [-0.076,+0.043]$ \\
+BPKD & $-0.0037\ [-0.024,+0.031]$ & $-0.0203\ [-0.080,+0.044]$ & $-0.0296\ [-0.071,+0.137]$ \\
+Gate $+$ boundary & $-0.0015\ [-0.022,+0.031]$ & $-0.0098\ [-0.083,+0.039]$ &
+  $+0.0290\ [-0.150,+0.086]$ \\
+\lose{Uniform ensemble} & \lose{$-0.0016\ [-0.031,+0.026]$} & $-0.0021\ [-0.049,+0.026]$ &
+  $+0.0111\ [-0.071,+0.091]$ \\
+\lose{Gate $+$ group} & \lose{$-0.0182\ [-0.037,+0.012]$} & $-0.0063\ [-0.060,+0.021]$ &
+  $-0.0137\ [-0.095,+0.027]$ \\
+\lose{Gate $+$ full} & \lose{$-0.0244\ [-0.042,+0.011]$} & \lose{$-0.0760\ [-0.128,-0.018]$} &
+  $-0.0013\ [-0.177,+0.044]$ \\
+\lose{Gate $+$ hard} & \lose{$-0.0275\ [-0.052,+0.007]$} & $-0.0237\ [-0.058,+0.019]$ &
+  $-0.0043\ [-0.102,+0.039]$ \\
+\lose{Angular} & \lose{$-0.0321\ [-0.065,+0.003]$} & \lose{$-0.0535\ [-0.111,-0.011]$} &
+  \lose{$-0.0550\ [-0.125,+0.012]$} \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\tabnote{All deltas are (arm $-$ B2$\to$B0 reference). Worst-group recall is endpoint 4 and is
+\emph{exploratory} --- every interval spans zero and none of it is claimed.}
+
+% ===========================================================================
+\section{The controlled contrast: gate versus averaging}
+
+\begin{figure}[H]\centering
+\includegraphics[width=0.72\textwidth]{figures_distill/f6_gate_vs_uniform.png}
+\caption{Same two teachers, same $\alpha=0.95$, same seed 42, same student architecture, same
+locked evaluation. The only difference between these two arms is the rule that combines
+$p_{B2}$ and $p_{B5}$.}
+\end{figure}
+
+\begin{center}\small
+\begin{tabular}{>{\raggedright\arraybackslash}p{5.4cm} C C}
+\toprule
+& \textbf{Uniform average} & \textbf{Reliability gate} \\
+\midrule
+Fusion rule & $\tfrac12(p_{B2}+p_{B5})$ & per-pixel, val-biased \\
+Subject-Dice CI lower bound & \lose{$-0.031$ (fails)} & \win{$-0.016$ (passes)} \\
+$\Delta$ small-bruise recall & $-0.002$ & \win{$+0.053$} \\
+5th-percentile subject Dice & \lose{0.515} & 0.623 \\
+Mean Dice & 0.7615 & \win{0.7748} \\
+Verdict & \lose{INFERIOR} & \win{REPORTABLE WIN} \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+Because every other variable is held fixed, the difference is attributable to the fusion rule and
+to nothing else. This is the cleanest evidence in the study.
+
+\begin{keybox}
+It is not \emph{more teachers} that helps. It is knowing \emph{which teacher to believe, at which
+pixel}. The uniform arm proves that having both teachers is not sufficient; the gated arm shows
+what converts their complementarity into a compact student.
+\end{keybox}
+
+% ===========================================================================
+\section{What can be claimed as novel}
+
+Stated at the level the evidence actually supports.
+
+\begin{enumerate}[leftmargin=1.8em,itemsep=6pt]
+  \item \textbf{A validation-derived, per-pixel reliability gate converts measured teacher
+  complementarity into a compact student.} \\
+  \emph{Evidence:} the study's only REPORTABLE WIN --- small-bruise recall $+0.053$, CI
+  $[+0.021,+0.076]$, $P(\Delta>0)=0.996$, with subject Dice non-inferior and $0.00\%$
+  complete-miss, in a 3.71M model. \\
+  \emph{Strength:} strong, but single seed.
+
+  \item \textbf{The gain comes from the gating mechanism, not from having two teachers.} \\
+  \emph{Evidence:} uniform averaging of the \emph{same} two teachers, at the same $\alpha$ and
+  seed, is INFERIOR (CI lower bound $-0.031$). A one-variable controlled contrast. \\
+  \emph{Strength:} strong. This is the claim that distinguishes the work from generic
+  multi-teacher KD.
+
+  \item \textbf{Teacher complementarity can be measured before committing compute.} \\
+  \emph{Evidence:} the validation oracle, $+0.0258$, CI $[+0.0165,+0.0362]$, $P=1.00$, computed
+  entirely on validation with the test set untouched. It is both a gate and a quantified upper
+  bound on what any router could achieve. \\
+  \emph{Strength:} strong, and methodologically transferable to any multi-teacher study.
+
+  \item \textbf{Failure-targeted add-ons hurt; the plain gate is the effective ingredient.} \\
+  \emph{Evidence:} a clean four-step ablation ladder --- $+$boundary drops to non-inferior;
+  $+$hard, $+$group and $+$full are all INFERIOR, with $+$full the worst arm overall. \\
+  \emph{Strength:} strong negative result, and it directly contradicts the project's own
+  pre-registered expectation, which makes it credible rather than convenient.
+
+  \item \textbf{A 3.7M student can exceed an 84.6M teacher on the endpoint that matters.} \\
+  \emph{Evidence:} small-bruise recall $0.801$ vs the B5 teacher's $0.791$, at $23\times$ fewer
+  parameters. \\
+  \emph{Strength:} suggestive --- the gap is small and single-seed.
+\end{enumerate}
+
+\subsection{Why these claims survive scrutiny}
+
+\begin{itemize}[leftmargin=1.6em,itemsep=3pt]
+  \item The success hierarchy was fixed \textbf{before} the arms ran, so the winning endpoint was
+        not chosen after seeing results.
+  \item The multi-teacher gate was a \textbf{hard precondition} evaluated on validation. Had the
+        oracle CI spanned zero, the adaptive arms would not have run at all.
+  \item $\alpha$ was searched on validation; $\mathrm{rel}_b$ was fitted on validation. Nothing in
+        the method has seen the test set.
+  \item Ablations were added \textbf{one component at a time}, so every regression is attributable.
+  \item Teachers and the reference were re-scored by the same code path, so no row is borrowed
+        from an earlier notebook.
+  \item \textbf{Five of eleven arms are INFERIOR and are reported as such}, including the
+        configuration the plan nominated as the headline. The single positive result is not the
+        surviving member of a silent search.
+\end{itemize}
+
+\subsection{What is explicitly \emph{not} claimed}
+
+Teacher mixing is not novel in itself (cf.\ HeteroAKD, AAAI'25). Neither confidence-weighted
+fusion nor distillation from an ensemble is new. The contribution being claimed is narrower: the
+combination of a \emph{validation-measured complementarity gate} with a \emph{validation-derived
+per-pixel reliability fusion}, evaluated against its own uniform-averaging control on a
+pre-registered failure endpoint. Nor is any fairness result claimed --- endpoint 4 is exploratory
+throughout and every worst-group interval spans zero.
+
+% ===========================================================================
+\section{Limitations}
+
+\begin{enumerate}[leftmargin=1.7em,itemsep=4pt]
+  \item \textbf{Single seed for every distillation arm.} The subject-cluster bootstrap captures
+  test-subject sampling variability, \emph{not} training-seed variance, so all Phase 4 intervals
+  are optimistic. The B5 seed spread alone is $\pm0.010$ mean Dice --- comparable to several of
+  the differences discussed above. \texttt{p3\_adaptive} and \texttt{p2\_ensemble\_uniform}
+  should be re-run at three seeds before the headline is treated as locked.
+
+  \item \textbf{Margins are modest.} Most Phase 4 Dice differences sit inside the
+  $\approx0.03$--$0.04$ detectable effect. The win is carried by a failure-tail endpoint, exactly
+  as the pre-registered hierarchy intended --- but it is a tail effect and must be described as
+  one, not as a general accuracy improvement.
+
+  \item \textbf{$n=28$ subjects is a hard ceiling} set by three-annotator overlap. No amount of
+  compute changes the resolution of this test set.
+
+  \item \textbf{The $\alpha$ search resolved nothing.} Validation Dice varies by less than $0.007$
+  across the whole grid --- less than seed noise. The selected $\alpha$ values are pre-committed,
+  not evidence-backed.
+
+  \item \textbf{Method-specific hyperparameters were inherited, not searched.} Only $\alpha$ was
+  searched. Every other constant --- $\lambda_{\mathrm{CWD}}=1.0$, BPKD's $\lambda_e=4.0$ /
+  $\lambda_b=1.0$ and $5\times5$ band, $\gamma_{\text{hard}}=2.0$ and the $2\%$ area threshold,
+  $\lambda_{\text{group}}=0.5$, $\beta_{\text{boundary}}=4.0$ --- was fixed by hand. Where a source
+  paper specifies a value it is worth checking against: CWD's $T=4$ matches Shu et al., but their
+  feature-map loss weight ($\alpha=50$) does not match the $1.0$ used here, and no arm's weight was
+  verified against its originating paper before the runs. \textbf{An INFERIOR verdict on any single
+  arm is therefore a verdict on \emph{this configuration} of the method, not on the method.}
+
+  \item \textbf{Fairness is exploratory.} 9--17 subjects per ITA group; the fairness gap is an
+  extremum-of-extrema statistic; a real bruise-size confound is present (light-skin bruises are
+  $\approx33\%$ smaller in this dataset); and clustered versus unclustered standard errors move
+  the light-skin result from $p=0.0016$ to $p\approx0.046$. Nothing here is an established
+  fairness finding.
+
+  \item \textbf{DKD did not complete} and is missing from every result table.
+
+  \item \textbf{Cross-phase comparability.} Phase 1--3 and Phase 4 use different evaluation passes
+  (Phase 4 re-scores the teachers). Rows must be compared within a phase --- see
+  \S\ref{sec:discrep}.
+
+  \item \textbf{One annotator's masks for training, one site, one camera setup.} Whether these
+  results generalise to a model trained on Gbarimah's or Erik's masks is untested; their training
+  pools are not on disk. No external-dataset validation has been run.
+\end{enumerate}
+
+% ===========================================================================
+\section{Next steps, in priority order}
+
+\begin{enumerate}[leftmargin=1.7em,itemsep=4pt]
+  \item \textbf{Three-seed the winner and its control} (\texttt{p3\_adaptive} and
+  \texttt{p2\_ensemble\_uniform}). Roughly a day of GPU time, and the single highest-value
+  remaining run: it converts the study's headline from suggestive to locked.
+
+  \item \textbf{Distil the gated teacher configuration into YOLO.} YOLO's $\approx6.5\%$
+  complete-miss is the largest real failure in the model set and the only one big enough to move
+  significantly. The machinery exists
+  (\texttt{scripts\_pipeline/40\_train\_yolo\_ensemble\_kd.py}).
+
+  \item \textbf{Close the pending baselines.} B5 now has three seeds (\S\ref{sec:b5seeds});
+  nnU-Net v2 fold 0 is trained but not scored. Both slot into the capacity-scaling table.
+
+  \item \textbf{Re-run DKD or drop it explicitly.} Leaving a written-but-unrun arm in the
+  configuration is worse than either.
+
+  \item \textbf{Test-time augmentation, reported separately.} \texttt{tta\_infer.py} exists and is
+  inference-only; it must never be folded into a training result.
+
+  \item \textbf{The dataset-merge $2\times2$} (\texttt{data\_merge.py}), once an external dataset
+  is available --- data $\{$current, merged$\}$ $\times$ method $\{$response, gated$\}$, changing
+  one factor at a time.
+
+  \item \textbf{Retrain on Gbarimah's and Erik's masks} with equalised pool sizes, the same
+  architecture and hyperparameters, scored against the same consensus. This tests ``who labels
+  your data matters more than which model you train'' and needs no new annotation.
+\end{enumerate}
+
+% ===========================================================================
+\appendix
+\section{Provenance of every number}
+
+Only results computed in this project are treated as ground truth. All paths below are relative to
+\texttt{BRUISE\_DISTILL\_B5\_RESULT/} unless noted.
+
+\begin{center}\footnotesize
+\setlength{\tabcolsep}{4pt}
+\begin{tabular}{>{\raggedright\arraybackslash}p{3.9cm} >{\raggedright\arraybackslash}p{10.6cm}}
+\toprule
+\textbf{Section} & \textbf{Source} \\
+\midrule
+\S\ref{sec:bestseed} core models &
+\texttt{results\_final/}\allowbreak{} best-seed per-image CSVs (project root); B5 row from
+\texttt{teachers/}\allowbreak\texttt{segformer\_b5\_teacher/}\allowbreak%
+\texttt{test\_per\_image.csv} \\
+\S\ref{sec:b5seeds} B5 seeds &
+\texttt{results\_segformer\_b5/}\allowbreak\texttt{runs/}\allowbreak%
+\texttt{segformer\_b5\_\_seed\{42,123,2026\}/}\allowbreak%
+\texttt{\{DONE,\allowbreak{}test\_per\_image\}}; \
+\texttt{teachers/}\allowbreak\texttt{segformer\_b5\_teacher/}\allowbreak%
+\texttt{seed\_selection.csv} \\
+Teacher calibration &
+\texttt{teachers/}\allowbreak\texttt{segformer\_b5\_teacher/}\allowbreak%
+\texttt{temperature.json} ($T{=}2.1999$); \
+\texttt{teachers/}\allowbreak\texttt{segformer\_b2\_teacher/}\allowbreak%
+\texttt{temperature.json} ($T{=}1.7604$) \\
+Deployment cost & \texttt{results\_final/}\allowbreak\texttt{benchmark\_640.csv}
+(A100, fp32, batch 1) \\
+\S\ref{sec:oracle} oracle gate & \texttt{distill\_out/}\allowbreak\texttt{val\_oracle/}\allowbreak%
+\texttt{val\_oracle.json} \\
+$\alpha$ search &
+\texttt{distill\_out/}\allowbreak\texttt{optuna\_alpha/}\allowbreak%
+\texttt{\{single\_b5\_response,}\allowbreak\texttt{ensemble\_uniform\}}\allowbreak%
+\texttt{\_best\_alpha.json} \\
+Reference rows &
+\texttt{distill\_out/}\allowbreak\texttt{reference/}\allowbreak%
+\texttt{segformer\_\{b2\_teacher,}\allowbreak\texttt{b0\_distilled\}}\allowbreak%
+\texttt{\_summary.json} and their \texttt{test\_per\_image.csv} \\
+Per-arm absolute metrics & \texttt{distill\_out/<arm>/DONE.json} \\
+Per-arm configuration & \texttt{distill\_out/<arm>/run\_config.json} \\
+All bootstrap deltas and verdicts & \texttt{distill\_out/aggregate/aggregate\_report.json}
+($B{=}5000$, margin $0.03$) \\
+Small-bruise recall (absolute) & recomputed here: bottom tercile of
+\texttt{gt\_positive\_pixels} ($\le 8{,}211$ px, 62 images), mean recall per arm \\
+Tail metrics for teachers & recomputed here from the reference per-image CSVs \\
+Loss definitions & \texttt{kd\_core.py} \S5 (\texttt{ResponseKD}, \texttt{cwd\_loss},
+\texttt{bpkd\_loss}, \texttt{angular\_distillation}, \texttt{dkd\_loss},
+\texttt{fuse\_teachers}, \texttt{hard\_example\_weight}, \texttt{group\_worst\_loss}) \\
+Protocol and hierarchy & \texttt{PROTOCOL.md}, \texttt{aggregate\_report.py} \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\section{Discrepancies found while writing this report}
+\label{sec:discrep}
+
+Recorded so nobody re-derives them and assumes a mistake.
+
+\begin{enumerate}[leftmargin=1.7em,itemsep=4pt]
+  \item \textbf{The B5 figure of $0.7829$ is not reproducible from this results folder.} It
+  appears in \texttt{PROTOCOL.md} and \texttt{README.md}, both written on 2026-07-22
+  \emph{before} the distillation suite retrained B5 from scratch (the earlier checkpoints used an
+  incompatible \texttt{net.*} key layout and were set aside). The three seeds actually on disk
+  score $0.7527$ / $0.7727$ / $0.7676$; the validation-selected seed 123 gives \textbf{0.7727}.
+  That is the number used throughout this report.
+
+  \item \textbf{Phase 4 teacher rows differ from Phase 1--3 teacher rows.} Under the locked
+  re-evaluation, B2 scores $0.7709$ / $0.8202$ and B0-distilled scores $0.7699$ / $0.8177$; the
+  best-seed Phase 1 tables report $0.7692$ / $0.8192$ and $0.7680$ / $0.8167$. Both are correct
+  for their own evaluation pass. \texttt{docs/bruise\_full\_report.tex} currently mixes the two in
+  its Phase 4 table --- it lists the Phase 1 teacher values alongside locked-eval arm values. The
+  differences are $\le 0.002$ Dice and change no verdict, but the table should be made internally
+  consistent before publication.
+
+  \item \textbf{Complete-miss versus zero Dice.} B5 seed 42's per-image CSV contains three images
+  at $0.00$ Dice, yet its summary correctly reports $0$ complete misses. Both are right: those
+  images have non-empty predictions that do not overlap the ground truth. Any table quoting
+  ``misses'' must state which definition it uses.
+
+  \item \textbf{DKD has a configuration but no results} (\S5), and must not be listed as ``run''.
+\end{enumerate}
+
+\vspace{8pt}
+{\color{rulegray}\hrule height 0.5pt}
+\vspace{4pt}
+
+\begin{center}\footnotesize\itshape
+All distillation arms are single seed (42) under one locked re-evaluation on the 185-image,
+28-subject consensus test set at $640\times640$, thresholds fitted on validation and applied once
+to test. The \texttt{*\_a0.xxx} alpha-search runs are short-epoch hyperparameter probes and are
+excluded from every table.
+\end{center}
+
+\end{document}

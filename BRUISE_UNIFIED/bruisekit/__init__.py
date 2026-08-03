@@ -1,0 +1,1 @@
+"""Bruise segmentation training kit. See docs/training_notebook_explained.md."""

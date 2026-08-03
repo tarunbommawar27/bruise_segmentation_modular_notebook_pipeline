@@ -1,0 +1,1028 @@
+% ============================================================================
+%  Bruise Segmentation -- Consolidated Results Report
+%  Compile:  tools\tectonic\tectonic.exe docs\bruise_full_report.tex
+%  Self-contained article class (no aaai26.sty needed).
+%  Every number is sourced; see Appendix A for the file each table came from.
+% ============================================================================
+\documentclass[11pt]{article}
+\usepackage[a4paper,margin=1in]{geometry}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{amsmath,amssymb}
+\usepackage{xcolor}
+\usepackage{fancyhdr}
+\usepackage{enumitem}
+\usepackage{longtable}
+\usepackage{caption}
+
+\definecolor{secblue}{RGB}{31,73,125}
+\definecolor{boxgray}{RGB}{244,246,249}
+\definecolor{wingreen}{RGB}{20,110,60}
+\definecolor{losered}{RGB}{150,40,40}
+\definecolor{rulegray}{RGB}{200,205,212}
+
+\usepackage[colorlinks=true,linkcolor=secblue,urlcolor=secblue,citecolor=secblue]{hyperref}
+
+\usepackage{sectsty}
+\sectionfont{\color{secblue}\large}
+\subsectionfont{\color{secblue}\normalsize}
+\usepackage[most]{tcolorbox}
+
+\pagestyle{fancy}\fancyhf{}
+\renewcommand{\headrulewidth}{0.4pt}
+\lhead{\small Bruise Segmentation}\rhead{\small Consolidated Results Report}\cfoot{\thepage}
+
+% right-aligned numeric column types, fixed widths so every table lines up
+% (text width at a4 + 1in margins is 15.92cm; every spec below is checked against it)
+\newcolumntype{n}{>{\raggedleft\arraybackslash}p{1.35cm}}   % standard numeric
+\newcolumntype{M}{>{\raggedleft\arraybackslash}p{1.90cm}}   % numeric w/ wide header
+\newcolumntype{C}{>{\raggedleft\arraybackslash}p{3.10cm}}   % confidence interval
+\newcolumntype{L}{>{\raggedright\arraybackslash}p{4.6cm}}   % model-name column
+\newcolumntype{K}{>{\raggedright\arraybackslash}p{3.4cm}}   % model-name, narrow
+
+\setlength{\parindent}{0pt}\setlength{\parskip}{5pt}
+\setlength{\tabcolsep}{5pt}
+\renewcommand{\arraystretch}{1.12}
+
+\newtcolorbox{keybox}[1][]{colback=boxgray,colframe=secblue,boxrule=0.6pt,arc=2pt,
+  left=8pt,right=8pt,top=6pt,bottom=6pt,#1}
+\newcommand{\win}[1]{\textcolor{wingreen}{\textbf{#1}}}
+\newcommand{\lose}[1]{\textcolor{losered}{#1}}
+\newcommand{\tabnote}[1]{\par\vspace{2pt}{\footnotesize\itshape #1}\par}
+
+\begin{document}
+
+% ===========================================================================
+\begin{center}
+  {\LARGE\bfseries Bruise Segmentation in White-Light Photographs}\\[5pt]
+  {\large Consolidated Results Report}\\[6pt]
+  {\small Core models \, $\cdot$ \, best-seed final run \, $\cdot$ \, CNN baselines \, $\cdot$ \,
+   capacity scaling \, $\cdot$ \, multi-teacher distillation}\\[3pt]
+  {\footnotesize 697/134/185 subject-grouped split \ $\cdot$ \ 2-of-3 consensus target \ $\cdot$ \
+   28 test subjects \ $\cdot$ \ ITA skin-tone groups}
+\end{center}
+
+\vspace{4pt}
+{\color{rulegray}\hrule height 1pt}
+\vspace{6pt}
+
+\tableofcontents
+\vspace{6pt}
+{\color{rulegray}\hrule height 0.5pt}
+
+% ===========================================================================
+\section{Executive Summary}
+
+\begin{keybox}
+\textbf{In one paragraph.} Eight model configurations spanning $1.6$M--$85$M parameters, CNN and
+transformer, were trained and scored under one fixed protocol on a 185-image, 28-subject
+consensus test set. Their Dice scores cluster tightly ($0.70$--$0.78$ mean), so \textbf{Dice does
+not separate architectures at this sample size} --- the minimum detectable effect is
+$\approx0.03$--$0.04$ and every architecture-vs-architecture gap is smaller than that. Two things
+\emph{do} separate them. First, the \textbf{complete-miss rate}: SegFormers miss $0.0$--$0.5\%$ of
+bruises entirely, YOLO26n misses $2$--$7\%$, and CNN baselines $1.8$--$3.2\%$. Second, a
+\textbf{validation oracle} shows the B2 and B5 teachers are genuinely complementary
+($+0.026$ Dice of per-image headroom, CI clear of zero) --- so the flat Dice is not a hard ceiling
+for \emph{combinations} of models. The distillation study built on that finding produces one
+\win{REPORTABLE WIN}: reliability-gated multi-teacher distillation into a 3.7M student matches the
+teachers' Dice at $0\%$ complete-miss while \win{significantly improving small-bruise recall}
+($+0.053$, CI $[+0.021,+0.076]$), and it does so precisely where naive uniform ensembling of the
+same two teachers is \lose{INFERIOR} --- isolating the reliability gate, not "more teachers", as
+the effective mechanism.
+\end{keybox}
+
+\subsection{Results at a glance}
+
+\begin{center}\small
+\begin{tabular}{L n n n n}
+\toprule
+\textbf{Model} & \textbf{Params} & \textbf{Mean} & \textbf{Median} & \textbf{Miss} \\
+ & (M) & Dice & Dice & (\%) \\
+\midrule
+\multicolumn{5}{l}{\textit{Core models --- 3-seed mean (\S4)}}\\
+SegFormer-B2 teacher            & 27.35 & 0.7651 & 0.8113 & 0.00 \\
+SegFormer-B0 distilled          & 3.71  & 0.7639 & 0.8114 & 0.18 \\
+SegFormer-B0 direct             & 3.71  & 0.7600 & 0.8113 & 0.54 \\
+YOLO26n-sem direct              & 1.63  & 0.6911 & 0.8021 & 7.57 \\
+YOLO26n-sem distilled           & 1.63  & 0.6676 & 0.7658 & 7.57 \\
+\addlinespace
+\multicolumn{5}{l}{\textit{CNN baselines --- 3-seed mean (\S6)}}\\
+U-Net (ResNet-50)               & $\sim$32 & 0.7526 & 0.8260 & 3.24 \\
+DeepLabV3+ (ResNet-50)          & $\sim$40 & 0.7453 & 0.8140 & 1.80 \\
+\addlinespace
+\multicolumn{5}{l}{\textit{Capacity scaling --- 1 seed (\S7)}}\\
+SegFormer-B5                    & $\sim$85 & 0.7829 & 0.8276 & 0.00 \\
+\addlinespace
+\multicolumn{5}{l}{\textit{Distillation study --- 1 seed, locked eval (\S8)}}\\
+\win{p3\_adaptive} (B2$+$B5 $\to$ B0) & 3.71 & \win{0.7748} & 0.8172 & 0.00 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\tabnote{Rows are not all mutually comparable: the core models and CNN baselines share one
+evaluation, the distillation arms share a separate \emph{locked} re-evaluation (\S8.1). Compare
+within a block, and use \S8 for the distillation-arm contrasts.}
+
+\subsection{The four things this report establishes}
+
+\begin{enumerate}[leftmargin=1.6em,itemsep=3pt]
+  \item \textbf{Compression is free.} A 3.7M distilled SegFormer-B0 ($0.7639$ mean, 3 seeds) is
+  statistically indistinguishable from the 27M B2 teacher ($0.7651$) at $7.4\times$ fewer
+  parameters and $2\times$ the throughput.
+  \item \textbf{Capacity alone gives diminishing returns.} Going from 3.7M to 85M moves median
+  Dice from $0.811$ to $0.828$ --- inside the noise band that the other seven configurations
+  also occupy.
+  \item \textbf{Complete-miss, not Dice, is the discriminating axis.} It is the only accuracy
+  quantity whose model-to-model differences exceed the resolution of this test set
+  (YOLO$-$B0-distilled $=+6.5$ points, CI $[+2.4,+11.6]$).
+  \item \textbf{Complementary teachers still contain recoverable headroom,} and a per-pixel
+  reliability gate --- not plain ensembling --- is what recovers it.
+\end{enumerate}
+
+% ===========================================================================
+\section{Task, Data, and Evaluation Protocol}
+
+\subsection{Task and target}
+Pixel-level segmentation of bruises in white-light (WL) forensic photographs, evaluated for equity
+across skin tone. This is a \textbf{multi-labeler study}: three annotators independently labeled
+each test image, and the segmentation target is their \textbf{2-of-3 majority-vote consensus mask}.
+Training uses one annotator's masks; evaluation is against the three-annotator consensus, making
+every test number a \emph{cross-annotator generalization} measurement rather than a conventional
+held-out score.
+
+\subsection{Split and protocol}
+
+\begin{center}\small
+\begin{tabular}{>{\raggedright\arraybackslash}p{3.4cm} >{\raggedright\arraybackslash}p{11cm}}
+\toprule
+Split & 697 train / 134 val / 185 test images, subject-grouped, \textbf{zero subject leakage} \\
+Test set size & 185 images from \textbf{28 subjects} --- the effective $n$ is 28, not 185 \\
+Resolution & $640\times640$ (image bilinear, mask nearest) for all models and all scoring \\
+Skin tone & Individual Typology Angle (ITA), 5 groups: Light\,II--III $\to$ Dark\,VI \\
+Model selection & best epoch chosen on \textbf{validation} Dice \\
+Decision threshold & swept on \textbf{validation} only, then applied \emph{once} to test \\
+Seeds & 3 seeds for the core models and CNN baselines; 1 seed for B5 and the distillation arms \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsection{Metrics}
+
+\begin{center}\small
+\begin{tabular}{>{\raggedright\arraybackslash}p{4.0cm} >{\raggedright\arraybackslash}p{10.4cm}}
+\toprule
+Mean / median Dice & Per-image Dice against the consensus mask, then averaged. Median is the more
+stable summary; the mean is dragged by the failure tail. \\
+\textbf{Complete-miss rate} & Fraction of images where the model predicts \emph{no} bruise on an
+image that has one. The high-consequence failure for an injury-documentation tool. \\
+Failure-tail metrics & \%\,recall$<$0.10, \%\,Dice$<$0.20, and the 5th-percentile subject-level
+Dice. These give resolution where complete-miss saturates at $0\%$. \\
+Uncertainty & \textbf{Subject-level cluster bootstrap}, $B=4000$, resampling the 28 subjects.
+Model-vs-model comparisons are \textbf{paired} (the same resample scores both models), which is
+correct for a shared test set and $\approx2\times$ tighter than independent resampling. \\
+$P(\Delta>0)$ & Bootstrap posterior-style probability that the effect is positive. Reported
+\emph{alongside} the two-sided CI, never instead of it. \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsection{Inter-annotator context}
+On the same 185 test images, pairwise annotator agreement (Dice) ranges $0.58$--$0.75$
+(three-pair mean $\approx0.64$), and annotator-vs-consensus ranges $0.70$--$0.87$ (\S5.7). This
+indicates substantial human labeling variability, and it frames every model comparison below: the
+model-vs-model differences under test ($0.002$--$0.02$) are an order of magnitude smaller than the
+human-vs-human disagreement in the labels.
+
+\begin{keybox}
+\textbf{Why $n=28$ is a ceiling, not a choice.} There are 28 test subjects because that is how
+many subjects \emph{all three} annotators labeled. A 29th cannot be obtained without new
+annotation. The correct reading of the null results below is therefore not "this study was too
+small" but "\emph{at the maximum sample size for which three-annotator consensus labels exist},
+model-level Dice differences are unresolvable."
+\end{keybox}
+
+% ===========================================================================
+\section{Experiment Inventory}
+
+Every result in this report comes from one of five runs. This table is the map.
+
+\begin{center}\footnotesize
+\begin{tabular}{>{\raggedright\arraybackslash}p{2.4cm} >{\raggedright\arraybackslash}p{4.5cm}
+                >{\raggedright\arraybackslash}p{1.9cm} >{\raggedright\arraybackslash}p{1.3cm}
+                >{\raggedright\arraybackslash}p{3.1cm}}
+\toprule
+\textbf{Phase} & \textbf{What was run} & \textbf{Where} & \textbf{Seeds} & \textbf{Reported in} \\
+\midrule
+1 --- Core & SegFormer-B2 / B0-direct / B0-distilled, YOLO26n-sem direct / distilled &
+Colab A100 & 3 & \S4 (3-seed), \S5 (best seed) \\
+2 --- Baselines & U-Net R50, DeepLabV3+ R50 & Colab A100 & 3 & \S6 \\
+3 --- Capacity & SegFormer-B5 & ORC / mlidl & 1 & \S7 \\
+4 --- Distillation & 11 KD arms, B2 and/or B5 $\to$ B0 & mlidl 2$\times$A100 & 1 & \S8 \\
+--- & nnU-Net v2 (2d) native baseline & ORC MIG slice & 1 (fold 0) & pending \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\tabnote{The \texttt{*\_a0.xxx} alpha-search trial runs are short-epoch hyperparameter probes and
+are excluded from every table in this report.}
+
+% ===========================================================================
+\section{Phase 1 --- Core Models (3 Seeds)}
+
+\subsection{Training recipe}
+All five core models share one protocol. \textbf{SegFormer} (B2 teacher, B0 student): Dice$+$BCE
+loss; AdamW with a backbone/head learning-rate split ($6\times10^{-5}$ / $6\times10^{-4}$), no
+weight decay on norm/bias parameters; 1\% warmup then poly decay stepped per optimizer step; AMP
+with gradient clipping at 1.0; \textbf{effective batch 8} enforced for every model by gradient
+accumulation, so batch size is not confounded with model size. \textbf{YOLO26n-sem}: trained with
+the native Ultralytics loop (mosaic, EMA, letterbox, its own schedule and auto-batch), because
+forcing a transformer's learning rate onto a CNN detector is not a fair baseline.
+
+\textbf{Distillation} is calibrated response-based KD --- temperature-scaled soft targets:
+\[
+  \mathcal{L}\;=\;\alpha\,\mathrm{DiceBCE}(z_s,y)\;+\;(1-\alpha)\,\mathrm{BCE}\!\left(z_s,\ \sigma(z_t/T)\right)
+\]
+with $\alpha=0.6$ for SegFormer-B0 and offline pseudo-mask KD at $\alpha=0.4$ for YOLO
+(Ultralytics only consumes a binary mask, so $\alpha>0.5$ would degenerate to the hard label).
+
+\subsection{Three-seed results}
+
+\begin{center}\small
+\begin{tabular}{L M M M n}
+\toprule
+\textbf{Model} & \textbf{Params} & \textbf{Mean Dice} & \textbf{Miss (\%)} & \textbf{Median} \\
+ & (M) & (mean $\pm$ s.d.) & (mean $\pm$ s.d.) & Dice \\
+\midrule
+SegFormer-B2 teacher    & 27.35 & $0.7651\pm0.0037$ & $0.00\pm0.00$ & 0.8113 \\
+SegFormer-B0 distilled  & 3.71  & $0.7639\pm0.0047$ & $0.18\pm0.31$ & 0.8114 \\
+SegFormer-B0 direct     & 3.71  & $0.7600\pm0.0055$ & $0.54\pm0.00$ & 0.8113 \\
+YOLO26n-sem direct      & 1.63  & $0.6911\pm0.0197$ & $7.57\pm1.08$ & 0.8021 \\
+YOLO26n-sem distilled   & 1.63  & $0.6676\pm0.0648$ & $7.57\pm4.80$ & 0.7658 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\tabnote{YOLO is reported on its \textbf{native-argmax} decoding, which is the sole correct
+reporting path (\S5.6). Values are means over seeds 0, 1, 2.}
+
+\subsection{Findings}
+
+\begin{enumerate}[leftmargin=1.6em,itemsep=3pt]
+  \item \textbf{Distillation preserves the teacher at $7.4\times$ fewer parameters.} Distilled B0
+  ($0.7639$) is indistinguishable from the B2 teacher ($0.7651$) and above direct B0 ($0.7600$).
+  Both gaps are inside the $\approx0.03$ minimum detectable effect, so the honest claim is
+  \emph{"the student loses nothing measurable"}, not \emph{"distillation helps"}.
+
+  \item \textbf{Distillation acts as a stabiliser more than a booster.} Its clearest effect on
+  SegFormer is on \emph{variance and misses}, not the mean: distilled B0's complete-miss rate
+  ($0.18\%$) is a third of direct B0's ($0.54\%$), and its seed spread is comparable while its
+  worst-case tail is better.
+
+  \item \textbf{Complete-miss separates the architectures where Dice cannot.} All SegFormers miss
+  $\le0.5\%$ of bruises entirely; YOLO misses $\approx7.6\%$. YOLO's respectable \emph{median}
+  Dice ($0.8021$) actively hides this --- the median is computed over the images it does find.
+
+  \item \textbf{YOLO's misses are seed-unstable.} Across seeds, YOLO-distilled's complete-miss
+  rate swings from $2.16\%$ to $11.35\%$ (s.d.\ $4.80$), whereas SegFormer-B2 blanks on
+  $0/185$ images in all three seeds. This instability, not the Dice mean, is YOLO's real defect.
+\end{enumerate}
+
+\subsection{Per-seed detail}
+
+\begin{center}\small
+\begin{tabular}{L n n n n n n}
+\toprule
+& \multicolumn{3}{c}{\textbf{Mean Dice}} & \multicolumn{3}{c}{\textbf{Complete-miss (\%)}} \\
+\cmidrule(lr){2-4}\cmidrule(lr){5-7}
+\textbf{Model} & seed 0 & seed 1 & seed 2 & seed 0 & seed 1 & seed 2 \\
+\midrule
+SegFormer-B2 teacher    & 0.7692 & 0.7638 & 0.7622 & 0.00 & 0.00 & 0.00 \\
+SegFormer-B0 direct     & 0.7663 & 0.7579 & 0.7559 & 0.54 & 0.54 & 0.54 \\
+SegFormer-B0 distilled  & 0.7680 & 0.7648 & 0.7588 & 0.00 & 0.00 & 0.54 \\
+YOLO26n direct          & 0.7028 & 0.6684 & 0.7021 & 8.65 & 7.57 & 6.49 \\
+YOLO26n distilled       & 0.7261 & 0.6787 & 0.5978 & 2.16 & 9.19 & 11.35 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\tabnote{Native-argmax decoding. The SegFormer seed spread is $\le0.010$ Dice; YOLO-distilled's
+spans $0.128$ --- a wider range than \emph{any} architecture difference in this report.}
+
+% ===========================================================================
+\section{Phase 1 (continued) --- The Final Run: Best Seed Selected on Validation}
+\label{sec:bestseed}
+
+The 3-seed means above answer "how does this architecture behave on average". A deployed system
+ships \emph{one} checkpoint. This section reports that single-checkpoint result, chosen the only
+legitimate way: \textbf{on validation}.
+
+\subsection{The selection rule}
+
+For each of the five core models:
+\begin{enumerate}[leftmargin=1.6em,itemsep=1pt]
+  \item Train 3 seeds. For each seed, pick the best epoch on validation Dice.
+  \item Sweep the decision cut on \textbf{validation only}; record the val mean Dice at that cut.
+  \item \textbf{Select the seed with the highest validation mean Dice.} The test set plays no part
+  in this choice.
+  \item Run inference \emph{once} with that seed's checkpoint at that seed's val-fitted cut, and
+  score on the 185-image test set.
+\end{enumerate}
+
+Test inference for this section was re-run from the checkpoints rather than read from a cached
+CSV, so the numbers below are recomputed end-to-end and not transcribed.
+
+\subsection{Selection outcome}
+
+\begin{center}\small
+\begin{tabular}{L M M M M}
+\toprule
+\textbf{Model} & \textbf{Selected} & \textbf{Val-fitted} & \textbf{Val mean} & \textbf{Test mean} \\
+ & \textbf{seed} & cut & Dice & Dice \\
+\midrule
+SegFormer-B2 teacher    & 0 & $-0.725$ & 0.7717 & 0.7692 \\
+SegFormer-B0 direct     & 0 & $-0.025$ & 0.7558 & 0.7663 \\
+SegFormer-B0 distilled  & 0 & $+0.100$ & 0.7662 & 0.7680 \\
+YOLO26n direct (native) & 2 & argmax   & 0.7311 & 0.7021 \\
+YOLO26n distilled (native) & 0 & argmax & 0.7428 & 0.7261 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\tabnote{SegFormer cuts are logits (the sweep is on the raw logit scale, not on probabilities);
+native YOLO uses Ultralytics' own argmax and has no swept cut. \textbf{Sanity check that the
+selection is honest:} for YOLO-direct, validation picked seed 2, whose test mean ($0.7021$) is
+\emph{not} the best of the three seeds (seed 0 reaches $0.7028$). A val-based selector that never
+peeked is expected to miss the test optimum occasionally, and here it did.}
+
+\subsection{Full test metrics for the selected checkpoints}
+
+\begin{center}\small
+\begin{tabular}{L n n n n n n}
+\toprule
+\textbf{Model} & \textbf{Mean} & \textbf{Median} & \textbf{Mean} & \textbf{Mean} & \textbf{Mean} &
+\textbf{Miss} \\
+ & Dice & Dice & IoU & Prec. & Recall & (\%) \\
+\midrule
+SegFormer-B2 teacher       & 0.7692 & \textbf{0.8192} & 0.6495 & 0.8592 & 0.7281 & \textbf{0.00} \\
+SegFormer-B0 distilled     & 0.7680 & 0.8167 & 0.6466 & 0.8625 & 0.7231 & \textbf{0.00} \\
+SegFormer-B0 direct        & 0.7663 & 0.8129 & 0.6454 & 0.8599 & 0.7270 & 0.54 \\
+YOLO26n distilled (native) & 0.7261 & 0.8012 & 0.6083 & 0.8647 & 0.6777 & 2.16 \\
+YOLO26n direct (native)    & 0.7021 & 0.8061 & 0.5939 & \textbf{0.8783} & 0.6697 & \lose{6.49} \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\tabnote{185 images, 28 subjects, scored at $640\times640$ against the 2-of-3 consensus mask.
+Note the shape of YOLO's error: its \emph{precision} is the highest of all five models while its
+\emph{recall} is the lowest --- it under-detects rather than over-predicts, which is exactly the
+failure mode that produces complete misses.}
+
+\subsection{Failure-tail metrics}
+
+Complete-miss saturates at $0\%$ for the strong SegFormers, so the tail metrics are what give
+resolution among them.
+
+\begin{center}\small
+\begin{tabular}{L M M M M}
+\toprule
+\textbf{Model} & \textbf{Miss} & \textbf{\% recall} & \textbf{\% Dice} & \textbf{5th-pct} \\
+ & (\%) & $<0.10$ & $<0.20$ & subj.\ Dice \\
+\midrule
+SegFormer-B2 teacher       & 0.00 & 0.00 & 0.54 & 0.5584 \\
+SegFormer-B0 distilled     & 0.00 & 0.00 & 1.08 & \textbf{0.5883} \\
+SegFormer-B0 direct        & 0.54 & 1.08 & 1.62 & 0.5634 \\
+YOLO26n distilled (native) & 2.16 & 3.78 & 3.78 & 0.4901 \\
+YOLO26n direct (native)    & 6.49 & \lose{10.81} & \lose{11.35} & \lose{0.4487} \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\tabnote{"5th-pct subj.\ Dice" is the 5th percentile of the 28 subject-level mean Dice values ---
+i.e.\ how bad the worst subjects are. The two zero-miss SegFormers separate here: B0-distilled has
+the better worst-case subject, B2 the better \%\,Dice$<$0.20.}
+
+\subsection{Uncertainty: marginal and paired}
+
+\textbf{Marginal 95\% CIs} (subject-level cluster bootstrap, $B=4000$, seed 42). These overlap
+almost completely among the SegFormers --- which is the point.
+
+\begin{center}\small
+\begin{tabular}{L M C}
+\toprule
+\textbf{Model} & \textbf{Mean Dice} & \textbf{95\% CI} \\
+\midrule
+SegFormer-B2 teacher       & 0.7692 & $[0.7318,\ 0.8024]$ \\
+SegFormer-B0 distilled     & 0.7680 & $[0.7387,\ 0.7958]$ \\
+SegFormer-B0 direct        & 0.7663 & $[0.7321,\ 0.7982]$ \\
+YOLO26n distilled (native) & 0.7261 & $[0.6650,\ 0.7823]$ \\
+YOLO26n direct (native)    & 0.7021 & $[0.6271,\ 0.7706]$ \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\textbf{Paired contrasts.} The same resample scores both models, so these intervals are much
+tighter than the marginal ones and are the correct basis for any claim.
+
+\begin{center}\small
+\begin{tabular}{>{\raggedright\arraybackslash}p{4.6cm} M C n >{\raggedright\arraybackslash}p{2.85cm}}
+\toprule
+\textbf{Contrast} & $\Delta$ & \textbf{95\% CI} & $P(\Delta{>}0)$ & \textbf{Verdict} \\
+\midrule
+Distillation (B0-dist $-$ B0-direct)   & $+0.0017$ & $[-0.0091,+0.0126]$ & 0.582 & n.s. \\
+Student $-$ teacher (B0-dist $-$ B2)   & $-0.0012$ & $[-0.0196,+0.0176]$ & 0.437 & n.s. \\
+YOLO distilled $-$ direct              & $+0.0239$ & $[-0.0142,+0.0590]$ & 0.901 & n.s. \\
+SegFormer $-$ YOLO (B0-dist $-$ YOLO-d)& $+0.0659$ & $[+0.0111,+0.1209]$ & 0.994 & \win{SIGNIFICANT} \\
+\textbf{Miss\%}: YOLO-dir $-$ B0-dist & $+6.49$ & $[+2.39,+11.63]$ & 1.000 & \win{SIGNIFICANT} \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\tabnote{Rows 1--4 are mean Dice; the last row is percentage points of complete-miss rate.
+$P(\Delta>0)$ is one-sided and is reported only alongside the two-sided CI.}
+
+\begin{keybox}
+\textbf{Reading the nulls correctly.} "n.s." means different things in different rows.
+Student$-$teacher at $P=0.437$ is a genuine coin flip: the 3.7M student and the 27M teacher are
+interchangeable on this test set. Distillation at $P=0.582$ is likewise unresolved. But
+SegFormer$-$YOLO and the miss-rate contrast are \emph{not} null --- and the miss-rate effect
+($+6.5$ points, CI excluding zero by a wide margin) is an order of magnitude larger, relative to
+its own uncertainty, than anything Dice can see.
+\end{keybox}
+
+\subsection{YOLO decoding: native argmax vs the custom \texttt{/255} path}
+
+YOLO26n was scored two ways on the same 185 images and the same selected checkpoints: (a)
+\textbf{native argmax}, using Ultralytics' own letterbox preprocessing and class-map argmax; and
+(b) a \textbf{custom \texttt{/255}} path that reproduces SegFormer's $640\times640$ stretch
+geometry and applies a val-swept probability threshold.
+
+\begin{center}\small
+\begin{tabular}{L n n n n n}
+\toprule
+\textbf{Model / path} & \textbf{Mean} & \textbf{Median} & \textbf{Miss} & \textbf{Mean} &
+\textbf{Mean} \\
+ & Dice & Dice & (\%) & Prec. & Recall \\
+\midrule
+YOLO direct --- native argmax     & 0.7021 & 0.8061 & 6.49 & 0.8783 & 0.6697 \\
+YOLO direct --- custom \texttt{/255}   & 0.7136 & 0.7934 & 4.32 & 0.8490 & 0.6960 \\
+\addlinespace
+YOLO distilled --- native argmax  & 0.7261 & 0.8012 & 2.16 & 0.8647 & 0.6777 \\
+YOLO distilled --- custom \texttt{/255} & 0.6932 & 0.7674 & 1.08 & 0.7406 & 0.7325 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\textbf{Why native argmax is the reported path.} YOLO26n is trained by Ultralytics' own loop,
+which feeds letterboxed \texttt{/255} pixels with no ImageNet normalisation. Any evaluation
+harness that changes the input distribution reaching the first convolution degrades the logits,
+and no downstream threshold or temperature sweep can undo that. Native argmax is the decoding the
+model was actually trained for; it is therefore the canonical number, and the custom path is shown
+here only to quantify the harness sensitivity.
+
+\begin{keybox}
+\textbf{This is itself a result.} The same frozen checkpoint moves by up to $0.033$ mean Dice and
+$2.2$ points of miss rate depending only on the evaluation harness --- larger than the
+distillation effect ($+0.0017$) and larger than the student--teacher gap ($-0.0012$) that this
+project spent most of its compute trying to measure. \textbf{Benchmark preprocessing choices swing
+the reported number more than the architecture choices do.}
+\end{keybox}
+
+\subsection{The annotation ceiling, and the model that beats its own annotator}
+\label{sec:ceiling}
+
+The individual annotator masks allow the labels themselves to be measured on the same 185 images,
+with the same code and the same $640$ grid. No model is involved.
+
+\begin{center}\small
+\begin{tabular}{>{\raggedright\arraybackslash}p{6.4cm} >{\raggedright\arraybackslash}p{4.6cm} M}
+\toprule
+\textbf{Comparison} & \textbf{Kind} & \textbf{Mean Dice} \\
+\midrule
+Gbarimah $\leftrightarrow$ Erik      & human vs human     & 0.7549 \\
+Paul $\leftrightarrow$ Erik          & human vs human     & 0.5812 \\
+Paul $\leftrightarrow$ Gbarimah      & human vs human     & 0.5809 \\
+\quad \textit{average human--human}  &                    & \textit{0.6390} \\
+\addlinespace
+Gbarimah vs majority                 & human vs consensus & 0.8729 \\
+Erik vs majority                     & human vs consensus & 0.8657 \\
+\textbf{Paul vs majority}            & human vs consensus & \textbf{0.6998} \\
+\addlinespace
+SegFormer-B2 teacher                 & model vs consensus & 0.7692 \\
+SegFormer-B0 distilled               & model vs consensus & 0.7680 \\
+SegFormer-B0 direct                  & model vs consensus & 0.7663 \\
+YOLO26n distilled (native)           & model vs consensus & 0.7261 \\
+YOLO26n direct (native)              & model vs consensus & 0.7021 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+Two structural facts follow. First, \textbf{Gbarimah and Erik agree with each other far more than
+either agrees with Paul} ($0.755$ vs $0.581$), so the 2-of-3 majority vote is effectively "what
+Gbarimah and Erik agreed on". Second, \textbf{Paul --- whose masks every model in this report is
+trained on --- matches that consensus target least well of the three annotators} ($0.6998$).
+
+That sets up the comparison: does a model trained only on Paul's masks agree with the three-expert
+consensus better than Paul himself does?
+
+\begin{center}\small
+\begin{tabular}{>{\raggedright\arraybackslash}p{3.6cm} M M M n >{\raggedright\arraybackslash}p{2.85cm}}
+\toprule
+\textbf{Model} & \textbf{Model vs} & \textbf{Paul vs} & $\Delta$ & $P(\Delta{>}0)$ &
+\textbf{Verdict} \\
+ & consensus & consensus & & & \\
+\midrule
+SegFormer-B2 teacher   & 0.7692 & 0.6998 & $+0.0694$ & 0.990 & \win{SIGNIFICANT} \\
+SegFormer-B0 distilled & 0.7680 & 0.6998 & $+0.0682$ & 0.980 & \win{SIGNIFICANT} \\
+SegFormer-B0 direct    & 0.7663 & 0.6998 & $+0.0665$ & 0.982 & \win{SIGNIFICANT} \\
+YOLO26n distilled      & 0.7261 & 0.6998 & $+0.0263$ & 0.858 & n.s. \\
+YOLO26n direct         & 0.7021 & 0.6998 & $+0.0023$ & 0.514 & n.s. \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\tabnote{Paired subject-level cluster bootstrap, $B=4000$, both sides scored against the same
+2-of-3 majority mask. 95\% CIs: B2 $[+0.010,+0.124]$, B0-distilled $[+0.003,+0.133]$,
+B0-direct $[+0.005,+0.126]$.}
+
+\begin{keybox}
+\textbf{All three SegFormers agree with the three-expert consensus significantly better than the
+annotator they were trained on.} Training averages away one annotator's idiosyncrasies and keeps
+what generalizes. This effect ($\approx+0.07$) is roughly \textbf{40$\times$ larger than the
+distillation effect} ($+0.0017$) --- and unlike it, its confidence interval excludes zero.
+
+It also explains the nulls elsewhere in this report mechanically rather than apologetically:
+the project was trying to resolve $0.002$--$0.02$ Dice differences between models against a target
+that carries $\approx0.36$ of annotation disagreement ($1-0.639$). \textbf{These models are
+label-limited, not capacity-limited.}
+\end{keybox}
+
+\subsection{Fairness across ITA skin-tone groups}
+
+Per-group median Dice for the selected checkpoints, with the fairness gap
+(best group $-$ worst group) and a Kruskal--Wallis test across the five groups.
+
+\begin{center}\footnotesize
+\begin{tabular}{K n n n n n n n}
+\toprule
+& \multicolumn{5}{c}{\textbf{Median Dice by ITA group}} & & \\
+\cmidrule(lr){2-6}
+\textbf{Model} & Light & Interm. & Tan & Brown & Dark & \textbf{Gap} & \textbf{KW $p$} \\
+ & (39) & (38) & (24) & (29) & (55) & & \\
+\midrule
+SegFormer-B2 teacher       & 0.789 & 0.867 & 0.773 & 0.810 & 0.793 & 0.094 & \lose{0.028} \\
+SegFormer-B0 direct        & 0.827 & 0.834 & 0.810 & 0.813 & 0.770 & 0.064 & 0.709 \\
+SegFormer-B0 distilled     & 0.829 & 0.819 & 0.795 & 0.822 & 0.786 & \textbf{0.043} & 0.749 \\
+YOLO26n direct (native)    & \lose{0.714} & 0.828 & 0.778 & 0.845 & 0.787 & \lose{0.131} & 0.212 \\
+YOLO26n distilled (native) & 0.758 & 0.827 & 0.813 & 0.833 & 0.772 & 0.075 & 0.063 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\tabnote{Group sizes (images) in parentheses. Only SegFormer-B2 reaches nominal significance
+($p=0.028$), and that is uncorrected across seven model variants.}
+
+The pattern worth naming is in \emph{recall and misses}, not median Dice:
+
+\begin{center}\small
+\begin{tabular}{L n n n n}
+\toprule
+& \multicolumn{2}{c}{\textbf{Light (II--III)}} & \multicolumn{2}{c}{\textbf{All other groups}} \\
+\cmidrule(lr){2-3}\cmidrule(lr){4-5}
+\textbf{Model} & mean recall & miss (\%) & mean recall & miss (\%) \\
+ & ($n=39$) & & ($n=146$) & \\
+\midrule
+SegFormer-B2 teacher       & 0.734 & 0.0  & 0.726 & 0.0 \\
+SegFormer-B0 distilled     & 0.710 & 0.0  & 0.727 & 0.0 \\
+SegFormer-B0 direct        & 0.741 & 2.6  & 0.723 & 0.0 \\
+YOLO26n direct (native)    & \lose{0.516} & \lose{15.4} & 0.711 & 4.1 \\
+YOLO26n distilled (native) & \lose{0.581} & \lose{7.7}  & 0.704 & 0.7 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\textbf{Interpretation and the honest caveat.} YOLO under-detects on light skin: its light-skin
+recall is $0.52$ against $0.71$ elsewhere, with a $15.4\%$ complete-miss rate in that group, while
+its light-skin \emph{precision} ($0.910$) is \emph{above} its own overall mean ($0.878$) ---
+under-detection, not confusion. The
+SegFormers show no comparable pattern. However, this is \textbf{exploratory}: the Light group has
+39 images from only 9 subjects, the fairness gap is a max-minus-min statistic over five groups
+(an extremum-of-extrema, which is volatile at this sample size), and there is a real size
+confound --- light-skin bruises are smaller in this dataset (median $8{,}085$ px vs $11$--$14$k,
+Kruskal $p=0.0003$), and smaller bruises are missed more by every model. The deficit survives
+conditioning on size and subject clustering, but only at the boundary
+($p\approx0.045$--$0.047$ clustered, versus $p=0.0016$ unclustered --- itself another example of
+how much the analysis choice moves the answer). \textbf{No fairness claim in this report should be
+stated as established.}
+
+\subsection{Deployment cost}
+
+A100, $640\times640$, batch 1, fp32, 185 images $\times$ 3 repeats, preprocessing excluded from
+the timer (raw forward pass only).
+
+\begin{center}\small
+\begin{tabular}{L n n n n n}
+\toprule
+\textbf{Model} & \textbf{Params} & \textbf{Median} & \textbf{p95} & \textbf{FPS} &
+\textbf{Peak act.} \\
+ & (M) & (ms) & (ms) & & (MB) \\
+\midrule
+SegFormer-B2 teacher   & 27.35 & 33.67 & 34.95 & 29.7  & 1779 \\
+SegFormer-B0 direct    & 3.71  & 16.68 & 16.94 & 59.9  & 1204 \\
+SegFormer-B0 distilled & 3.71  & 16.64 & 17.07 & 60.1  & 1204 \\
+YOLO26n direct         & 1.63  & 8.18  & 8.36  & 122.2 & 967 \\
+YOLO26n distilled      & 1.63  & 8.22  & 8.51  & 121.7 & 967 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\begin{keybox}
+\textbf{The compression case, stated precisely.} SegFormer-B0-distilled runs $2.02\times$ faster
+than the B2 teacher on $7.4\times$ fewer parameters, with $0\%$ complete-miss on both, and a
+mean-Dice difference of $-0.0012$ whose 95\% CI is $[-0.020,+0.018]$. There is no measurable
+accuracy cost to the compression, and this is the checkpoint to deploy among the five core models.
+\end{keybox}
+
+% ===========================================================================
+\section{Phase 2 --- Classical CNN Baselines (3 Seeds)}
+
+U-Net and DeepLabV3+ (ResNet-50 encoders, from the
+\texttt{segmentation\_models\_pytorch} library) place the transformers against standard
+segmentation CNNs under the \emph{identical} split, resolution, training loop, and evaluation.
+
+\begin{center}\small
+\begin{tabular}{L M M M n}
+\toprule
+\textbf{Model} & \textbf{Params} & \textbf{Mean Dice} & \textbf{Miss (\%)} & \textbf{Median} \\
+ & (M) & (mean $\pm$ s.d.) & (mean $\pm$ s.d.) & Dice \\
+\midrule
+U-Net (ResNet-50)      & $\sim$32$^\dagger$ & $0.7526\pm0.0154$ & $3.24\pm0.54$ & \textbf{0.8260} \\
+DeepLabV3+ (ResNet-50) & $\sim$40$^\dagger$ & $0.7453\pm0.0182$ & $1.80\pm0.62$ & 0.8140 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\tabnote{$^\dagger$ Nominal encoder-based parameter estimates; not measured in this project's
+benchmark harness (unlike the SegFormer/YOLO counts in \S5.9, which are).}
+
+\textbf{Finding.} The CNN baselines are competitive on Dice --- U-Net's median ($0.8260$) is
+actually the highest of \emph{all} pre-distillation models in this report --- but they miss more
+bruises entirely ($1.8$--$3.2\%$) than any SegFormer ($\le0.5\%$). Point gaps to the SegFormers
+($0.007$--$0.020$ mean Dice) sit at or below the $\approx0.03$--$0.04$ minimum detectable effect,
+so \textbf{this report does not claim SegFormer beats U-Net or DeepLabV3+ on accuracy.} What it
+claims is that the three SegFormers and the two CNN baselines now cluster in a
+$0.745$--$0.765$ mean-Dice band, and that the
+one axis on which they visibly order themselves is complete-miss:
+SegFormer $<$ DeepLabV3+ $<$ U-Net $<$ YOLO.
+
+Baseline fairness (ITA) was computed and is not significant for either model.
+
+% ===========================================================================
+\section{Phase 3 --- Capacity Scaling: SegFormer-B5}
+
+SegFormer-B5 ($\sim$85M, the largest MiT encoder) was trained with the core SegFormer recipe
+verbatim, to test directly whether more capacity raises the ceiling.
+
+\begin{center}\small
+\begin{tabular}{L M M n n}
+\toprule
+\textbf{Model} & \textbf{Params} & \textbf{Mean Dice} & \textbf{Median} & \textbf{Miss (\%)} \\
+ & (M) & & Dice & \\
+\midrule
+SegFormer-B5 (1 seed) & $\sim$85 & 0.7829 & 0.8276 & 0.00 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\begin{keybox}
+\textbf{Observation across Phases 1--3.} Across eight model configurations spanning $1.6$M--$85$M
+parameters, CNN and transformer, median Dice sits in a narrow band ($0.766$--$0.828$): the 85M B5
+($0.828$) barely exceeds the 3.7M distilled B0 ($0.811$) and the U-Net baseline ($0.826$).
+
+\emph{Increasing model capacity alone gives diminishing returns under the current data and
+evaluation protocol.} This is stated as an observation, not a proven ceiling --- and \S8.2 shows
+the qualification matters: a \emph{combination} of models still has measurable headroom that no
+single model reaches.
+\end{keybox}
+
+\textbf{Status caveat:} B5 is a \textbf{single seed}. Given that the SegFormer seed spread in
+\S4.4 is $\pm0.005$--$0.010$, B5's $0.7829$ should be read as "$\approx0.78$, consistent with the
+band", not as a rank-1 finish. The 3-seed run is pending, as is the nnU-Net v2 native baseline
+(fold 0 trained on an ORC MIG slice; not yet scored).
+
+% ===========================================================================
+\section{Phase 4 --- Multi-Teacher Distillation Study}
+
+\subsection{Design and evaluation lock}
+
+Because single-model Dice is flat, the study is framed around a practical question:
+\textbf{can a compact 3.7M student preserve overall quality while reducing high-consequence
+failures and deployment cost?} It distils into SegFormer-B0 from the best-of-3-seed B5 (selected
+on validation, calibrated to $T=2.20$) and/or the B2 teacher.
+
+All KD terms extend the calibrated response loss
+\[
+  \mathcal{L}\;=\;\alpha\,\mathrm{DiceBCE}(z_s,y)\;+\;(1-\alpha)\,\mathrm{BCE}\!\left(z_s,\ \sigma(z_t/T)\right)
+\]
+with $\alpha$ searched on validation (Optuna, falling back to grid search). \textbf{Every model in this
+phase --- including the B2 and B5 teachers and the B2$\to$B0 reference --- is re-scored under one
+locked evaluation}, so all rows in \S8.5 are mutually comparable even though they are not directly
+comparable to the Phase 1--3 tables.
+
+\subsection{The multi-teacher gate: a validation oracle}
+
+Before committing compute to multi-teacher methods, a subject-cluster bootstrap on
+\textbf{validation} tested whether B2 and B5 are actually complementary. The test set was not
+touched.
+
+\begin{center}\small
+\begin{tabular}{>{\raggedright\arraybackslash}p{8.6cm} C}
+\toprule
+\textbf{Quantity (validation only)} & \textbf{Value} \\
+\midrule
+Spearman(B2 per-image Dice, B5 per-image Dice)          & 0.82 \\
+Images where B5 beats B2 by $>0.10$                     & 18 \\
+Images where B2 beats B5 by $>0.10$                     & 12 \\
+Oracle (best-teacher-per-image) gain over best single    & $+0.0258$ \\
+\quad 95\% CI                                            & $[0.0165,\ 0.0362]$ \\
+\quad $P(\text{gain}>0)$                                 & 1.00 \\
+\textbf{Adaptive gate}                                   & \win{PASS} \\
+Reliability weight $\mathrm{rel}_b$ (weight on B5)       & 0.634 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\textbf{Interpretation.} B2 and B5 make genuinely different errors on genuinely different images.
+A perfect per-image selector would gain $\approx2.6$ Dice points over either teacher alone, with
+the CI clear of zero. \textbf{So the flat single-model Dice in \S7 is not a hard ceiling --- it is
+a ceiling on \emph{single} models}, and there is measured, real headroom for a method that can
+route between complementary teachers.
+
+\subsection{Methods under test}
+
+\begin{center}\small
+\begin{tabular}{>{\raggedright\arraybackslash}p{4.6cm} >{\raggedright\arraybackslash}p{9.8cm}}
+\toprule
+\textbf{Arm} & \textbf{What it transfers} \\
+\midrule
+Response KD & calibrated teacher probabilities (the baseline KD) \\
+CWD (ICCV'21) & per-channel spatial distributions --- the canonical seg-KD baseline \\
+BPKD (WACV'24) & boundary and body knowledge, separately \\
+Angular (WACV'24) & feature \emph{direction} rather than magnitude (scale-robust for B5$\to$B0) \\
+DKD (CVPR'22) & decoupled target / non-target logits (low priority in binary segmentation) \\
+Uniform ensemble & $\tfrac12(p_{B2}+p_{B5})$ --- the "more teachers" control \\
+\textbf{Reliability-gated (novel)} & per-pixel confidence $\times$ disagreement gate, biased by the
+val-derived $\mathrm{rel}_b$ \\
+\quad $+$boundary / $+$hard / $+$group / $+$full & one component added at a time (ablation) \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+Teacher mixing itself is not novel (cf.\ HeteroAKD, AAAI'25); the contribution is the specific
+combination of a validation-derived reliability gate with failure-risk weighting and boundary
+knowledge.
+
+\subsection{Pre-registered success hierarchy}
+
+Because Dice is flat, success is judged in a fixed priority order, decided before the arms ran:
+
+\begin{enumerate}[leftmargin=1.8em,itemsep=1pt]
+  \item \textbf{Non-inferiority in subject-level Dice} (margin $0.03$) --- the primary gate.
+  \item Reduction in \textbf{complete-miss and the low-recall tail} (\%recall$<$0.10,
+        \%Dice$<$0.20, 5th-percentile subject Dice).
+  \item Improved \textbf{small-bruise recall}.
+  \item Improved \textbf{worst-ITA-group recall} (exploratory).
+  \item Lower \textbf{deployment cost} (parameters, latency) --- scored separately.
+\end{enumerate}
+
+Every comparison uses the paired subject-cluster bootstrap (28 subjects) against the B2$\to$B0
+reference, and each arm receives one verdict:
+\win{REPORTABLE WIN} / NON-INFERIOR / \lose{INFERIOR}.
+
+\subsection{Per-arm test results}
+
+All students are SegFormer-B0 (3.71M). Teachers and the reference are shown for context.
+Sorted by median Dice.
+
+\begin{center}\footnotesize
+\begin{tabular}{>{\raggedright\arraybackslash}p{4.7cm} n n n n n n}
+\toprule
+\textbf{Model / arm} & \textbf{Mean} & \textbf{Median} & \textbf{Miss} & \textbf{\%rec} &
+\textbf{\%Dice} & \textbf{p5} \\
+ & Dice & Dice & (\%) & $<$.10 & $<$.20 & subj \\
+\midrule
+SegFormer-B5 teacher (85M)   & 0.7727 & \textbf{0.8273} & 0.00 & 0.00 & 0.00 & 0.544 \\
+\win{p3\_adaptive}           & \win{0.7748} & 0.8172 & 0.00 & 1.08 & 1.08 & 0.623 \\
+p2\_cwd                      & 0.7736 & 0.8230 & 0.54 & 2.16 & 2.16 & \textbf{0.650} \\
+p3\_adaptive\_boundary       & 0.7668 & 0.8221 & 0.00 & 2.16 & 2.70 & 0.606 \\
+SegFormer-B2 teacher (27M)   & 0.7692 & 0.8192 & 0.00 & 0.00 & 0.54 & --- \\
+SegFormer-B0 distilled (ref) & 0.7680 & 0.8167 & 0.00 & 0.00 & 1.08 & --- \\
+p2\_ensemble\_uniform        & 0.7615 & 0.8139 & 0.00 & 1.62 & 1.62 & 0.515 \\
+p2\_bpkd                     & 0.7651 & 0.8091 & 0.54 & 1.08 & 1.62 & 0.589 \\
+expA\_response               & 0.7683 & 0.8061 & 0.00 & 2.16 & 2.16 & 0.616 \\
+p3\_adaptive\_group          & 0.7586 & 0.8047 & 0.54 & 1.08 & 2.16 & 0.636 \\
+x\_angular                   & 0.7418 & 0.8043 & 0.54 & 2.16 & 3.24 & 0.549 \\
+p3\_adaptive\_hard           & 0.7414 & 0.8023 & 0.00 & 2.16 & 3.24 & 0.509 \\
+p3\_adaptive\_full           & 0.7515 & 0.7984 & 1.08 & 2.70 & 2.70 & 0.587 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\tabnote{Locked re-evaluation, 185 images. Single seed (42) per arm. Because the teachers are
+re-scored here too, their numbers differ slightly from \S5.3 --- compare within this table only.}
+
+\subsection{Statistical verdicts vs the B2$\to$B0 reference}
+
+\begin{center}\footnotesize
+\begin{tabular}{>{\raggedright\arraybackslash}p{3.4cm} >{\raggedright\arraybackslash}p{2.7cm}
+                >{\raggedleft\arraybackslash}p{3.4cm} >{\raggedright\arraybackslash}p{4.1cm}}
+\toprule
+\textbf{Arm} & \textbf{Verdict} & $\Delta$ \textbf{small recall [95\% CI]} & \textbf{Note} \\
+\midrule
+\win{p3\_adaptive}     & \win{REPORTABLE WIN} & $+0.053\,[+0.021,+0.076]$ &
+  non-inferior Dice $+$ small-recall gain \\
+p2\_cwd                & NON-INFERIOR & $+0.004\,[-0.053,+0.049]$ & compresses without loss \\
+p2\_bpkd               & NON-INFERIOR & $-0.020\,[-0.080,+0.044]$ & compresses without loss \\
+p3\_adaptive\_boundary & NON-INFERIOR & $-0.010\,[-0.083,+0.039]$ & \\
+expA\_response         & NON-INFERIOR & $-0.028\,[-0.055,-0.007]$ & regresses small recall \\
+p2\_ensemble\_uniform  & \lose{INFERIOR} & $-0.002\,[-0.049,+0.026]$ & subject-Dice CI lo $-0.031$ \\
+p3\_adaptive\_group    & \lose{INFERIOR} & $-0.006\,[-0.060,+0.021]$ & subject-Dice CI lo $-0.037$ \\
+p3\_adaptive\_full     & \lose{INFERIOR} & $-0.076\,[-0.128,-0.018]$ & subject-Dice CI lo $-0.042$ \\
+p3\_adaptive\_hard     & \lose{INFERIOR} & $-0.024\,[-0.058,+0.019]$ & subject-Dice CI lo $-0.052$ \\
+x\_angular             & \lose{INFERIOR} & $-0.054\,[-0.111,-0.011]$ & subject-Dice CI lo $-0.065$ \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\tabnote{"$\Delta$ small recall" is (arm $-$ reference) recall on small bruises. INFERIOR verdicts
+are driven by the primary gate: the lower bound of the paired subject-Dice CI falls below the
+$-0.03$ non-inferiority margin.}
+
+\subsection{Findings}
+
+\begin{enumerate}[leftmargin=1.6em,itemsep=4pt]
+  \item \textbf{The reliability-gated adaptive method is the sole winner.} \win{p3\_adaptive} is
+  the only \textbf{REPORTABLE WIN}: non-inferior on subject Dice \emph{and} a significant
+  improvement in small-bruise recall ($+0.053$, CI $[+0.021,+0.076]$, $P=0.996$) --- a real
+  reduction in a high-consequence failure that Dice hides. At $3.71$M parameters its mean Dice
+  ($0.7748$) edges out both the 85M B5 and the 27M B2 teachers under the same locked eval, at
+  $0\%$ complete-miss.
+
+  \item \textbf{The gate matters, not just "more teachers".} With the \emph{same two teachers},
+  plain uniform averaging is \lose{INFERIOR} (subject-Dice CI lower bound $-0.031$), while the
+  per-pixel confidence$\times$disagreement gate wins. This contrast is the cleanest evidence in
+  the study: it isolates the \emph{gating mechanism}, not the ensemble, as what captures the
+  complementary knowledge the validation oracle promised.
+
+  \item \textbf{The plain gate is best; the failure-targeting add-ons over-engineer it.} Every
+  ablation stacked on the adaptive base reduced subject Dice --- \lose{$+$hard}, \lose{$+$group},
+  and \lose{$+$full} all to INFERIOR, and $+$boundary down to merely non-inferior. The reliability
+  gate alone is the effective ingredient.
+
+  \item \textbf{Standard seg-KD baselines compress without loss.} CWD, BPKD, and response KD are
+  all non-inferior --- consistent with \S4.3's finding that the compact student loses nothing.
+  Angular distillation \lose{hurt} ($0.7418$): matching feature \emph{direction} under-performed
+  here, plausibly because the B5$\to$B0 architectural gap makes the feature spaces
+  non-corresponding.
+\end{enumerate}
+
+\begin{keybox}
+\textbf{Phase 4 in one sentence.} A 3.7M student distilled from a reliability-gated fusion of two
+complementary teachers matches the teachers' overall Dice at $0\%$ complete-miss while
+significantly improving small-bruise recall --- and does so precisely where naive ensembling of
+the same teachers fails, identifying the reliability gate as the effective mechanism.
+\end{keybox}
+
+% ===========================================================================
+\section{Synthesis}
+
+Reading Phases 1--4 together, three claims are supported and one common claim is not.
+
+\textbf{Supported.}
+\begin{enumerate}[leftmargin=1.6em,itemsep=2pt]
+  \item \textbf{Compression is free on this task.} A 3.7M student matches a 27M teacher
+  (paired $\Delta=-0.0012$, CI $[-0.020,+0.018]$) at $2\times$ the throughput, and every standard
+  seg-KD method reproduces this. Deploy the small model.
+  \item \textbf{Failure rate, not Dice, is the axis that resolves.} Complete-miss ranges $0\%$ to
+  $7.6\%$ across the model set, and the SegFormer--YOLO miss contrast ($+6.5$ points, CI
+  $[+2.4,+11.6]$) is one of only three significant accuracy findings in the whole project.
+  \item \textbf{The labels are the binding constraint.} Human--human agreement is $0.639$; all
+  three SegFormers agree with the consensus significantly \emph{better} than the annotator they
+  learned from ($\approx+0.07$, $P\ge0.98$). Model-vs-model differences ($0.002$--$0.02$) are far
+  below the annotation noise floor.
+\end{enumerate}
+
+\textbf{Not supported.} That any architecture beats any other on Dice. The six
+non-YOLO configurations span just $0.745$--$0.783$ mean Dice; the minimum detectable effect at $n=28$ subjects is
+$\approx0.03$--$0.04$; and, as \S5.6 shows, the evaluation harness alone can move a frozen
+checkpoint by $0.033$. Architecture-ranking claims on this test set are not identifiable.
+
+\textbf{The one place a real gain was found} is not a bigger model but a \emph{better use of two
+models}: the validation oracle measured $+0.026$ of per-image headroom between B2 and B5, and
+reliability-gated distillation converted part of that into a significant small-bruise recall
+improvement in a 3.7M student.
+
+% ===========================================================================
+\section{Limitations}
+
+\begin{enumerate}[leftmargin=1.6em,itemsep=3pt]
+  \item \textbf{Single seed for the distillation arms and for B5.} The subject-cluster bootstrap
+  captures test-subject sampling variability, \emph{not} training-seed variance --- so all Phase 3
+  and Phase 4 intervals are optimistic. Given that YOLO-distilled's seed spread is $0.128$ Dice
+  (\S4.4), this matters. \texttt{p3\_adaptive} and \texttt{p2\_ensemble\_uniform} should be re-run
+  at 3 seeds before the Phase 4 conclusion is treated as locked.
+  \item \textbf{Margins are modest.} Most Phase 4 differences sit inside the Dice MDE
+  ($\approx0.03$--$0.04$); the win is carried by the failure-tail endpoint, exactly as the
+  pre-registered hierarchy intended, but it is a tail effect and should be described as one.
+  \item \textbf{$n=28$ subjects is a hard ceiling} set by three-annotator overlap, not by budget.
+  No amount of additional compute changes the resolution of this test set.
+  \item \textbf{Fairness is exploratory.} 9--17 subjects per ITA group; the fairness gap is an
+  extremum-of-extrema statistic; a real bruise-size confound is present; and clustered vs
+  unclustered standard errors move the light-skin result from $p=0.0016$ to $p\approx0.046$.
+  Nothing here is an established fairness finding.
+  \item \textbf{Cross-phase comparability.} Phase 1--3 and Phase 4 use different evaluation
+  passes (the Phase 4 lock re-scores the teachers). Rows must be compared within a phase.
+  \item \textbf{Training pool is one annotator's masks.} Whether the "model beats its annotator"
+  result generalises to a model trained on Gbarimah or Erik is untested --- their training pools
+  are not on disk.
+  \item \textbf{Single site, single camera setup.} No external-dataset validation has been run.
+\end{enumerate}
+
+% ===========================================================================
+\section{Next Steps}
+
+\begin{enumerate}[leftmargin=1.6em,itemsep=3pt]
+  \item \textbf{Three-seed the Phase 4 winner and its control} (\texttt{p3\_adaptive} and
+  \texttt{p2\_ensemble\_\allowbreak uniform}). This is the single highest-value remaining run: it converts the
+  study's headline from suggestive to locked.
+  \item \textbf{Finish the pending baselines}: SegFormer-B5 at 3 seeds, and nnU-Net v2 fold 0
+  scored (it is trained but not yet scored). Both slot into the annotation-ceiling table.
+  \item \textbf{Distil the winning teacher configuration into YOLO.} YOLO's $\approx7.6\%$
+  complete-miss is the largest real failure in the model set and the only one big enough to move
+  significantly.
+  \item \textbf{Retrain on Gbarimah's and Erik's masks} (equalised pool sizes, same architecture
+  and hyperparameters, scored against the same consensus). This directly tests "who labels your
+  data matters more than which model you train" --- given \S5.7, it is likely the strongest
+  available result and needs no new annotation.
+  \item \textbf{Run the harness-sensitivity sweep} (normalisation $\times$ letterbox $\times$
+  interpolation on frozen weights). \S5.6 already shows one instance of it; systematising it turns
+  a pipeline defect into a general claim about benchmark fragility.
+  \item \textbf{Data scaling and re-annotation.} Distillation cannot answer whether performance is
+  genuinely data-limited; only adding data or adding annotators can.
+\end{enumerate}
+
+% ===========================================================================
+\appendix
+\section{Provenance of Every Number}
+
+Only results computed in this project are treated as ground truth. Older reference PDFs in
+\texttt{docs/} are used for design rationale only, never for numbers.
+
+\begin{center}\footnotesize
+\begin{tabular}{>{\raggedright\arraybackslash}p{4.1cm} >{\raggedright\arraybackslash}p{10.3cm}}
+\toprule
+\textbf{Section} & \textbf{Source} \\
+\midrule
+\S4.2, \S4.4 (3-seed, per-seed) &
+\texttt{results\_final/FINAL\_RESULTS.csv}, \texttt{segformer\_test\_per\_seed.csv},
+\texttt{yolo\_test\_per\_seed.csv} \\
+\S5.2 (selection outcome) &
+\texttt{best\_seed\_val\_selected/best\_seed\_val\_selected\_results.csv} \\
+\S5.3--5.4 (test + tail metrics) &
+per-image CSVs in \texttt{final\_analysis\_.../per\_image\_*.csv}, 185 rows each; tail metrics
+recomputed here from those rows \\
+\S5.5 (marginal CIs) &
+recomputed for this report: subject-level cluster bootstrap, $B{=}4000$, seed 42, over the same
+per-image CSVs \\
+\S5.5 (paired contrasts) & \texttt{final\_analysis\_.../paired\_contrasts.csv} \\
+\S5.6 (YOLO paths) & \texttt{per\_image\_yolo\_sem\_*\_custom255.csv} vs the native per-image CSVs \\
+\S5.7 (annotation ceiling) &
+\texttt{interlabeler\_agreement\_640.csv} $\to$ \texttt{annotation\_ceiling.csv},
+\texttt{model\_vs\_paul.csv} \\
+\S5.8 (fairness) &
+\texttt{fairness\_per\_group\_bestseed.csv}, \texttt{fairness\_stats\_bestseed.csv} \\
+\S5.9 (speed) & \texttt{results\_final/benchmark\_640.csv} (A100, fp32, batch 1) \\
+\S6 (CNN baselines) &
+\texttt{results\_baselines/BASELINES\_RESULTS.csv},
+\texttt{smp\_baselines\_test\_per\_seed.csv} \\
+\S7 (B5) & SegFormer-B5 baseline run, locked-eval score \\
+\S8 (distillation) &
+distillation-suite aggregate report (mlidl, 2$\times$A100); all arms single seed under one locked
+re-evaluation \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\vspace{6pt}
+{\color{rulegray}\hrule height 0.5pt}
+\vspace{4pt}
+
+\begin{center}\footnotesize\itshape
+Phases 1--2 are 3-seed means (native-argmax for YOLO); SegFormer-B5 and all distillation arms are
+single seed. Everything is scored on the 185-image, 28-subject consensus test set at
+$640\times640$ under one fixed protocol, with thresholds fitted on validation and applied once to
+test. The distillation arms use a separate locked re-evaluation for cross-arm comparability.
+The \texttt{*\_a0.xxx} alpha-search trial runs are short-epoch hyperparameter probes and are
+excluded from all tables.
+\end{center}
+
+\end{document}

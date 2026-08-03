@@ -1,0 +1,374 @@
+\documentclass[11pt]{article}
+\usepackage[a4paper,margin=1in]{geometry}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{amsmath,amssymb}
+\usepackage{xcolor}
+\usepackage{fancyhdr}
+\usepackage{enumitem}
+\usepackage{longtable}
+\usepackage[colorlinks=true,linkcolor=black,urlcolor=black,citecolor=black]{hyperref}
+
+% AAAI-consolidated look: dark-blue section headings + running header rule
+\definecolor{secblue}{RGB}{31,73,125}
+\definecolor{boxgray}{RGB}{244,246,249}
+\definecolor{noveltygreen}{RGB}{20,110,60}
+\usepackage{sectsty}
+\sectionfont{\color{secblue}\large}
+\subsectionfont{\color{secblue}\normalsize}
+\usepackage[most]{tcolorbox}
+
+\pagestyle{fancy}
+\fancyhf{}
+\renewcommand{\headrulewidth}{0.4pt}
+\lhead{\small Bruise Segmentation}
+\rhead{\small Distillation Techniques \& Novelty Roadmap}
+\cfoot{\thepage}
+
+\newcolumntype{P}[1]{>{\raggedright\arraybackslash}p{#1}}
+\setlength{\parindent}{0pt}
+\setlength{\parskip}{5pt}
+
+% Convenience macros
+\newcommand{\Lsup}{\mathcal{L}_{\mathrm{sup}}}
+\newcommand{\Lkd}{\mathcal{L}_{\mathrm{KD}}}
+\newcommand{\Lfair}{\mathcal{L}_{\mathrm{fair}}}
+\newcommand{\stopgrad}{\mathrm{sg}}
+\newcommand{\novel}[1]{\textcolor{noveltygreen}{\textbf{#1}}}
+
+\newtcolorbox{scopebox}{colback=boxgray,colframe=secblue,boxrule=0.6pt,
+  arc=2pt,left=8pt,right=8pt,top=6pt,bottom=6pt}
+
+\begin{document}
+
+\begin{center}
+  {\LARGE\bfseries Knowledge Distillation: Techniques and Novelty Roadmap}\\[4pt]
+  {\large For the Fairness-Aware Bruise Segmentation Pipeline}\\[2pt]
+  {\small SegFormer-B0 / B2 / B5 \, $\cdot$ \, YOLO26n-sem \, $\cdot$ \, paired ALS/WL \, $\cdot$ \, ITA skin-tone groups}
+\end{center}
+
+\vspace{2pt}
+
+\begin{scopebox}
+\textbf{What this document is.} A technical proposal that (i) synthesises the project's own
+nine-technique distillation catalogue with the 34-paper fairness-aware KD literature review,
+and (ii) proposes \novel{novel mix-and-match techniques} not previously combined for bruise
+segmentation. \textbf{No new numbers are claimed} --- every technique here is a \emph{candidate}
+for experiments. Existing results are quoted only as anchors. All comparisons are assumed to run
+through the project's established protocol (paired subject-level cluster bootstrap, 28 subjects,
+$B{=}4000$, median-Dice MDE $\approx 0.04$), and every claim is framed on
+\textbf{complete-miss rate and worst-group performance}, not mean Dice, because the task is
+\textbf{label-limited, not capacity-limited} (seven architectures cluster at 0.74--0.79;
+human--human agreement $\approx 0.639$).
+\end{scopebox}
+
+\section{Executive Summary}
+
+The single most valuable novelty available to this project is already \emph{half-observed}:
+\textbf{the distilled student beats its teacher}. On the 185-image test set, SegFormer-B0
+\emph{distilled} reaches mean Dice \textbf{0.786} against the SegFormer-B2 teacher's
+\textbf{0.773}, at $7.4\times$ fewer parameters (3.71\,M vs 27.35\,M). A student that
+outperforms a $7\times$ larger teacher is the strongest possible framing for a distillation
+paper --- but at present it is a single-condition observation inside the $\sim$0.04 MDE. The
+techniques below are organised around \emph{turning that anecdote into a robust, explained,
+fairness-audited result}.
+
+Three groups of ideas follow:
+\begin{enumerate}[leftmargin=1.4em,itemsep=1pt]
+  \item \textbf{Catalogue (\S4)} --- nine architecture-matched techniques from the project's
+  own proposal doc, each now cross-referenced to the fairness-KD literature that validates it.
+  \item \textbf{Novel combinations (\S5)} --- \novel{nine mix-and-match techniques} whose
+  specific combination does not appear in the bruise-segmentation or fairness-KD literature.
+  These are the paper-worthy contributions.
+  \item \textbf{Student-beats-teacher playbook (\S6)} and \textbf{beyond distillation (\S7)}.
+\end{enumerate}
+
+\section{Project Assets and What Already Exists}
+
+\begin{center}
+\small
+\begin{tabular}{P{3.1cm} P{4.0cm} P{4.4cm} P{2.0cm}}
+\toprule
+Asset & Detail & Role in distillation & Params (M) \\
+\midrule
+SegFormer-B5 & largest 2021 MiT family member & \emph{candidate} big teacher (gated) & $\sim$82--85 \\
+SegFormer-B2 & current teacher & response-KD teacher (WL, ALS) & 27.35 \\
+SegFormer-B0 & current student & distilled + direct & 3.71 \\
+YOLO26n-sem & fastest model, high miss & pseudo-label student; DML candidate & 1.63 \\
+Paired ALS/WL & same bruise, two modalities & cross-modal teacher (ALS$\to$WL) & --- \\
+ITA groups (5) & per-image skin-tone index & fairness reweighting / gating & --- \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\textbf{Already implemented (baselines, not to be re-proposed).} Online response-based KD
+(WL$\to$WL, median Dice 0.828); offline pseudo-label KD (YOLO); cross-modal KD (ALS$\to$WL,
+median 0.811); fairness-reweighted KD (Approach A/B, the latter adds an MMD feature term).
+\emph{Every one of these matches only the final output probability.} The gap --- intermediate
+features, spatial structure, multi-source fusion, and miss-rate-targeted transfer --- is what
+the new techniques address.
+
+\section{Technique Catalogue, Cross-Referenced to the Literature}
+
+Each row is a technique from the project's internal proposal, now paired with the
+fairness-KD paper(s) that independently support it. ``Cost'' is implementation + compute
+relative to the existing response-KD path.
+
+\begin{center}
+\small
+\begin{longtable}{P{2.7cm} P{4.6cm} P{4.4cm} P{1.5cm}}
+\toprule
+Technique & What it transfers & Literature anchor & Cost \\
+\midrule
+\endhead
+Feature / hint (FitNets) & intermediate encoder feature maps via $1{\times}1$ adapters & ClearKD (Huang 2024) refines teacher features for medical KD & small \\
+Attention transfer & single-channel spatial attention per stage; no adapter & spatial-focus transfer; complements hint & near-zero \\
+Structured / channel-wise & per-channel spatial distributions (KL) + pixel-affinity (MSE) & scale-invariant relational KD & small \\
+Boundary-aware KD & KD loss reweighted by distance-to-edge & segmentation-fairness gap (Ben\v{c}evi\'c 2023) & near-zero \\
+Multi-teacher ensemble & WL-teacher $+$ ALS-teacher fused soft target & AGRE-KD (Kenfack 2024); ensemble-KD (Radwan 2024) & moderate \\
+Deep mutual learning & SegFormer-B0 $\leftrightarrow$ YOLO, live, no frozen teacher & DSP-KD progressive transfer (Zeng 2024) & moderate \\
+Self-distillation & network's own deep layers teach shallow (raises ceiling) & last-layer transplant debiasing (Lee 2023) & small \\
+Adversarial fairness & GRL makes skin tone unrecoverable from features & adversarial debiasing (2023); FairDisCo (2022) & moderate \\
+Compression-aware & INT8 / pruned student, KD-recovered & FairPrune (Wu 2022); channel pruning (Kong 2024) & small \\
+\bottomrule
+\end{longtable}
+\end{center}
+
+\noindent\textbf{Generic response-KD loss (the shared base).}
+\[
+\mathcal{L} \;=\; \alpha\,\Lsup(z_s, y) \;+\; (1-\alpha)\,\mathrm{BCE}\!\big(z_s,\ \sigma(z_t/T)\big),
+\]
+temperature-scaled, calibrated soft targets (Menon-style, as in
+\texttt{pipeline/losses.py::DistillSegLoss}). Every technique below is an
+\emph{additive term} or a \emph{reweighting} of this base.
+
+\section{Novel Mix-and-Match Techniques}
+
+The literature review's central finding is that fairness-KD methods
+(FairDi, AGRE-KD, two-biased-teachers, FairPrune, FairDisCo, BMFT, causal modeling)
+were developed almost entirely for \textbf{classification}. Segmentation fairness is called out
+as ``underexplored, existing methods ineffective'' (Ben\v{c}evi\'c 2023; the review's
+\emph{Fairness in Segmentation} gap, priority Medium). \novel{Porting these methods to
+pixel-level bruise segmentation, and fusing them with this project's unique
+ALS/WL pairing and complete-miss metric, is where the novelty lives.} Mix-and-match counts as
+novelty when the specific combination has not appeared before --- each idea below is annotated
+with why it is new.
+
+\begin{center}
+\small
+\begin{longtable}{@{}p{0.4cm} P{5.3cm} P{5.5cm} c@{}}
+\toprule
+\# & Novel technique & Why it is new (not in either source) & Priority \\
+\midrule
+\endhead
+N1 & \novel{Complete-miss-aware distillation} & KD optimises Dice/logits everywhere; nobody weights the loss by \emph{teacher-confident $\wedge$ student-missed} regions to kill the project's headline failure (YOLO 7--9\% miss) & High \\
+N2 & \novel{Heterogeneous cross-family $+$ cross-modal ensemble} & B5(WL) $+$ B2(ALS) $\to$ B0: teachers differ in \emph{both} architecture family \emph{and} imaging modality; ensemble-KD papers use same-modality same-family teachers & High \\
+N3 & \novel{Boundary $\times$ fairness joint reweighting} & one per-pixel weight $= w_{\text{edge}}\!\cdot w_{\text{group}}$; boundary-KD and group-KD both exist, their product does not & High \\
+N4 & \novel{ALS-oracle uncertainty-gated KD} & use ALS soft targets \emph{only} where the WL teacher is uncertain --- ALS reveals bruises invisible on WL, disproportionately on darker skin & High \\
+N5 & \novel{Group-robust ensemble weighting for segmentation} & AGRE-KD's adaptive per-group teacher weights, ported from classification to pixel-level, gated by the surviving light-skin recall deficit & Medium \\
+N6 & \novel{Ceiling-raising self-distillation $\to$ response KD} & self-distil the B5/B2 teacher first (raise the ceiling), \emph{then} distil to B0 --- chaining the only technique that improves the teacher with the transfer step & Medium \\
+N7 & \novel{Disagreement-mined mutual learning} & SegFormer-B0 $\leftrightarrow$ YOLO co-training where inter-model disagreement \emph{is} the hard-example signal (fuses DML with hard-example mining) & Medium \\
+N8 & \novel{Pixel-level adversarial fairness (GRL)} & FairDisCo/adversarial debiasing are image-level classifiers; a per-pixel GRL on decode features conditioned on ITA is untried for bruise seg & Medium \\
+N9 & \novel{Fairness-preserving compression} & INT8/prune B0 with KD recovery while \emph{monitoring per-group miss-rate} --- FairPrune is classification; segmentation edge-deploy fairness is open & Low \\
+\bottomrule
+\end{longtable}
+\end{center}
+
+\subsection{N1 --- Complete-Miss-Aware Distillation \novel{(top pick)}}
+The project's own reporting leads with complete-miss rate, not Dice --- YOLO misses 7--9\% of
+bruises entirely, and misses concentrate on hard cases (small, low-contrast, and plausibly
+specific skin tones). Standard KD spends equal loss budget on every pixel and so barely moves
+the miss rate. Define a per-pixel weight that fires exactly where the teacher is confident there
+is a bruise but the student predicts background:
+\[
+w_{\text{miss}}(x,y) \;=\; 1 \;+\; \gamma\,\underbrace{p_t(x,y)}_{\text{teacher conf.}}\cdot
+\underbrace{\big(1-\sigma(z_s(x,y))\big)}_{\text{student misses}},\qquad
+\mathcal{L}^{\text{miss}}_{\text{KD}} = \operatorname*{mean}_{x,y}\big[w_{\text{miss}}\cdot\mathrm{BCE}(z_s,p_t)\big].
+\]
+\textbf{Why novel:} KD losses in both sources optimise agreement uniformly; none target the
+\emph{complete-miss} event, which is this project's primary metric. \textbf{Hook:} one-line
+reweight of \texttt{DistillSegLoss}, reusing the teacher forward already in the loop. \textbf{Risk:}
+low --- reduces to standard KD at $\gamma{=}0$.
+
+\subsection{N2 --- Heterogeneous Cross-Family + Cross-Modal Ensemble \novel{(top pick)}}
+Train one WL-only B0 student against a single soft target fused from \emph{two structurally
+different} teachers: SegFormer-B5 on the WL image and SegFormer-B2 on the paired ALS image.
+\[
+p_{\text{ens}}(x,y) \;=\; g(x,y)\,p^{\,\text{B5,WL}}(x,y) \;+\; \big(1-g(x,y)\big)\,p^{\,\text{B2,ALS}\to\text{WL}}(x,y).
+\]
+The gate $g$ can be fixed, confidence-based, or conditioned on ITA group. \textbf{Why novel:}
+ensemble-KD papers (Radwan, Kenfack) combine same-modality, same-family teachers; here the two
+teachers disagree by \emph{design} --- different capacity family \emph{and} different physics
+(ALS fluorescence vs white light). \textbf{Gate:} only worthwhile if the Phase-1 disagreement
+analysis shows B5/B2 make complementary errors; otherwise single-teacher B5 KD suffices.
+
+\subsection{N3 --- Boundary $\times$ Fairness Joint Reweighting}
+Both a boundary weight (from the distance transform already in
+\texttt{metrics\_extended.py}) and a group weight (from the ITA label already used by the
+fairness losses) can multiply the same pixel-wise KD term:
+\[
+w(x,y)=\underbrace{\exp\!\big(-d(x,y)^2/2\sigma^2\big)}_{\text{edge focus}}\cdot
+\underbrace{\lambda_{g(x,y)}}_{\text{ITA-group weight}},\qquad
+\mathcal{L} = \operatorname*{mean}\big[w\cdot\mathrm{BCE}(z_s,p_t)\big].
+\]
+\textbf{Why novel:} each factor exists in isolation; their product --- ``sharpen boundaries
+\emph{most} for the worst-served skin-tone group'' --- does not appear in either source and
+directly serves the project's surface-Dice/HD95 \emph{and} fairness goals at once.
+
+\subsection{N4 --- ALS-Oracle Uncertainty-Gated KD}
+ALS (alternate light source) fluorescence reveals bruising that is invisible or faint under
+white light, and the clinical motivation for the whole project is that this gap is largest on
+\emph{darker} skin. Instead of a fixed ALS$\to$WL distillation, use the ALS teacher as a
+\emph{selective oracle}: trust ALS soft targets only where the WL teacher is uncertain.
+\[
+p^{*}(x,y)=\big(1-u(x,y)\big)\,p^{\text{WL}} + u(x,y)\,p^{\text{ALS}},\quad
+u(x,y)=\mathbf{1}\!\big[\,|p^{\text{WL}}-\tfrac12| < \tau\,\big],
+\]
+with $u$ the WL-teacher uncertainty gate. \textbf{Why novel:} cross-modal KD exists in the
+project, but \emph{uncertainty-gated, fairness-motivated} modality fusion --- ALS as a targeted
+corrector for exactly the ambiguous, disproportionately dark-skin regions --- is new and
+clinically grounded.
+
+\subsection{N5 --- Group-Robust Ensemble Weighting for Segmentation}
+Port AGRE-KD (Kenfack 2024, adaptive group-robust ensemble KD, classification) to
+pixel-level: set the ensemble gate weights per ITA group from \emph{validation worst-group
+recall}, so the ensemble leans on whichever teacher best serves the currently-worst-served
+group. \textbf{Why novel:} AGRE-KD has never been applied to segmentation, and the group signal
+is anchored to the one fairness quantity that has survived clustering here (the light-skin
+recall deficit).
+
+\subsection{N6 --- Ceiling-Raising Self-Distillation, then Transfer}
+Every other technique assumes the teacher is fixed. Self-distillation (auxiliary heads on early
+encoder stages, each matching GT \emph{and} the network's own deepest stop-grad output) is the
+one technique that improves the \emph{teacher itself}. Apply it to B5/B2 first, then run N1--N4
+from the improved teacher. \textbf{Why novel here:} chaining ceiling-raising self-distillation
+into a downstream fairness-aware transfer is a two-stage recipe neither source proposes; it also
+gives the cleanest ``student beats an even-stronger teacher'' story (\S6).
+
+\subsection{N7 --- Disagreement-Mined Mutual Learning}
+Deep mutual learning trains SegFormer-B0 and YOLO26n-sem together, each the other's live soft
+target (no frozen teacher). Novelty: use the \emph{per-pixel inter-model disagreement} as an
+automatic hard-example weight --- the two very different architectures disagree exactly on the
+ambiguous cases that drive the annotation ceiling and the miss rate. \textbf{Caveat:} needs a
+supervised warmup to avoid joint collapse; a genuinely new dual-optimizer training script.
+
+\subsection{N8 --- Pixel-Level Adversarial Fairness}
+A gradient-reversal discriminator tries to predict ITA group from the student's decode features;
+the backbone is pushed to make skin tone unrecoverable. FairDisCo and adversarial debiasing do
+this for image-level classifiers; \novel{a per-pixel GRL for a segmentation decode head} is
+untried for bruise work. Frame as ``Approach C,'' run \emph{alongside} the existing MMD Approach
+B for comparison, since adversarial training is less stable than moment matching.
+
+\subsection{N9 --- Fairness-Preserving Compression}
+Prune/INT8-quantise the distilled B0 with a short KD recovery fine-tune (teacher = full-precision
+B0), \emph{gated on per-ITA-group miss-rate not dropping}. FairPrune (Wu 2022) and channel
+pruning (Kong 2024) show pruning can \emph{improve} fairness in classification; whether that
+holds for segmentation edge deployment is open. Only worthwhile once a sub-10\,ms on-device
+target is real (B0 already hits 86 FPS on GPU).
+
+\section{The Student-Beats-Teacher Playbook}
+
+This is the headline the user asked to prioritise, and the data already leans in its favour
+(B0-distilled mean Dice $0.786 > 0.773$ B2). To make it a \emph{robust, defensible} claim rather
+than a within-MDE coincidence:
+
+\begin{enumerate}[leftmargin=1.4em,itemsep=2pt]
+  \item \textbf{Establish it with statistics, not a point estimate.} Report the paired
+  student$-$teacher difference with its 95\% cluster-bootstrap CI on \emph{mean Dice,
+  complete-miss rate, and worst-ITA-group recall} --- not median Dice, where the gap is inside
+  the MDE. ``Beats on mean Dice and matches on median at $7.4\times$ smaller'' is already true
+  and publishable.
+  \item \textbf{Explain \emph{why} a student can beat its teacher.} The mechanism here is
+  \emph{regularisation}: soft teacher targets smooth the label noise that caps every model at the
+  annotation ceiling. A student trained on calibrated soft targets can generalise past a teacher
+  trained on hard, noisy masks. This reframes ``student beats teacher'' from a curiosity into
+  \emph{evidence that the task is label-limited} --- the project's central thesis.
+  \item \textbf{Strengthen the effect deliberately} with the techniques above, in expected order
+  of payoff: N1 (miss-aware) and N4 (ALS-oracle) attack the exact failures the teacher makes;
+  N2 (heterogeneous ensemble) gives the student a target better than \emph{any single} teacher,
+  which is the cleanest route to a student that beats every individual teacher; N6 raises the
+  teacher ceiling so the win is against a \emph{stronger} baseline.
+  \item \textbf{Audit fairness of the win.} A student that beats the teacher on mean Dice but
+  worsens the worst-group deficit is not a real win. Report the per-group breakdown every time.
+\end{enumerate}
+
+\section{Beyond Distillation --- What Else We Can Do}
+
+The literature review flags gaps that distillation alone will not close; these are
+complementary contributions the project is well-positioned for.
+
+\begin{center}
+\small
+\begin{tabular}{P{3.6cm} P{7.2cm} P{2.6cm}}
+\toprule
+Direction & What and why & Fit \\
+\midrule
+Skin-tone scale robustness & Report fairness under Monk / chromatic-clustering \emph{as well as} ITA; Desai (2025) + Kalb (2023) show ITA is high-variance and granular scales expose disparities the project may be masking & High (eval-only, cheap) \\
+Minority-tone augmentation & Diffusion / image-to-image synthesis (FairSkin; Wang majority$\to$minority) to enlarge under-represented ITA groups --- directly attacks the annotation ceiling & Medium \\
+Active annotation on misses & Semi-supervised / active learning targeting complete-miss images; the real bottleneck is labels, not capacity & High (addresses root cause) \\
+Calibration-aware eval & Temperature-fit every model and report ECE per group; soft-target KD only helps if teachers are calibrated & Medium \\
+Multi-attribute fairness & Move beyond single-attribute ITA toward intersection with bruise size/age --- the review's ``lack of multi-attribute fairness'' gap & Low \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\section{Prioritised Roadmap}
+
+Ordered by (payoff) $\div$ (implementation cost $\times$ risk), reusing existing code wherever
+possible and respecting the ``ablate one component at a time'' rule.
+
+\begin{center}
+\small
+\begin{tabular}{@{}c P{5.0cm} P{4.6cm} P{2.6cm}@{}}
+\toprule
+Order & Do this & Because & New infra? \\
+\midrule
+1 & N1 complete-miss-aware KD & one-line reweight; targets the headline metric; cannot hurt at $\gamma{=}0$ & no \\
+2 & N3 boundary $\times$ fairness reweight & reuses distance-transform + ITA weights already present & no \\
+3 & Phase-1 gate: B5 vs B2 disagreement & decides whether N2/N5 ensembles are worth it & no \\
+4 & N2 heterogeneous ensemble (if gate passes) & cleanest ``beats every single teacher'' result & merges 2 loops \\
+5 & N4 ALS-oracle gated KD & clinically grounded fairness lever; ALS teacher exists & moderate \\
+6 & N6 self-distil teacher, then re-distil & raises ceiling; strengthens \S6 story & new head \\
+7 & N5 group-robust ensemble weighting & fairness refinement of N2 & small \\
+8 & N8 adversarial fairness (Approach C) & compare vs MMD Approach B & moderate \\
+9 & N7 DML, N9 compression & genuinely new training infra; deployment-gated & yes \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\begin{scopebox}
+\textbf{Headline experiment if resources force one choice:}
+\novel{B5$\to$B0 miss- and fairness-aware distillation} ---
+$\mathcal{L} = \alpha\Lsup + (1-\alpha)\,\mathcal{L}^{\text{miss}}_{\text{KD}}
++ \lambda_{\text{edge$\times$grp}}\mathcal{L}^{\text{N3}}$, extended to the heterogeneous
+B5(WL)$+$B2(ALS) ensemble (N2) only if the Phase-1 gate shows complementary errors.
+Report on complete-miss rate and worst-ITA-group recall with cluster CIs; never run the whole
+stack at once.
+\end{scopebox}
+
+\section*{\textcolor{secblue}{Key References (Fairness-Aware KD Literature)}}
+\small
+\begin{itemize}[leftmargin=1.2em,itemsep=1pt]
+\item Masroor et al.\ (2024). \emph{Fair Distillation: teaching fairness from biased teachers in medical imaging.}
+\item Kenfack et al.\ (2024). \emph{Adaptive Group-Robust Ensemble Knowledge Distillation (AGRE-KD).}
+\item Pundhir et al.\ (2024). \emph{Biasing \& debiasing (two-biased-teachers) for equitable skin analysis.}
+\item Zeng et al.\ (2024). \emph{DSP-KD: dual-stage progressive KD for skin disease classification.}
+\item Yu et al.\ (2024). \emph{Variational AdaBoost KD for skin lesion classification.}
+\item Huang et al.\ (2024). \emph{ClearKD: clear KD for medical image classification.}
+\item Lee \& Lee (2023). \emph{Debiased distillation by transplanting the last layer.}
+\item Wu et al.\ (2022). \emph{FairPrune: fairness through pruning.} \quad Kong et al.\ (2024). \emph{Channel pruning for fairness.}
+\item Xue et al.\ (2024). \emph{BMFT: bias-based weight masking fine-tuning.}
+\item \emph{FairDisCo} (2022); Adversarial debiasing for fair skin lesion classification (2023).
+\item Ben\v{c}evi\'c et al.\ (2023). \emph{Understanding skin color bias in deep learning-based skin lesion segmentation.} (segmentation gap)
+\item Desai et al.\ (2025). \emph{The effect of skin tone classification on bias in bruise detection.} (YOLOv5; ITA vs granular scales)
+\item Kalb et al.\ (2023). \emph{Revisiting skin tone fairness} (ITA variability). \quad Zhang et al.\ (2024). \emph{FairSkin: fair diffusion.}
+\end{itemize}
+
+\vfill
+\begin{center}\footnotesize\itshape
+Proposal document --- no results claimed. Every technique is a candidate for future experimentation,
+to be validated on complete-miss rate and worst-group performance under the project's paired
+cluster-bootstrap protocol.
+\end{center}
+
+\end{document}

@@ -1,170 +1,381 @@
-# Forensic White-Light Bruise Segmentation — a 3-annotator intersection study
+# Bruise Segmentation — Modular Notebook Pipeline
 
-Code for a controlled comparison of semantic-segmentation models for **white-light (WL) bruise
-segmentation** on a multi-annotator forensic dataset, with knowledge distillation and a strong
-emphasis on **honest statistics** (subject-level clustering, failure-mode analysis, annotation-noise
-ceiling).
+Binary segmentation of bruises in white-light photographs, built as a **thin
+notebook over a fat library**. One notebook runs the whole study; every model,
+metric and statistical test lives in tested modules beside it.
 
-> **Headline finding:** at the maximum sample size for which 3-annotator consensus labels exist
-> (**28 subjects**), model-vs-model Dice differences are smaller than annotation noise — and a model
-> trained on a *single* annotator agrees with the 3-expert consensus **better than that annotator
-> does**. The binding constraint is label quality, not model capacity.
+The pipeline covers seven stages — five headline models, two CNN baselines, a
+SegFormer-B5 distillation grid, four mobile-scale architectures, two
+cross-architecture distillation axes, a descriptive analysis suite and a
+confirmatory significance layer.
+
+> **No data, no weights in this repository.** The study uses 1016 clinical
+> photographs of 143 human subjects. Neither the images, the masks, nor the 27
+> trained checkpoints are published here. See
+> [Data availability](#data-availability) below.
 
 ---
 
-## 1. What this project is
+## The finding that governs everything else
 
-The data are white-light photographs from the NIJ bruise dataset, labelled by multiple annotators.
-The three highest-volume annotators — **Paul, Gbarimah, Erik** — were identified.
+**Every model is at the annotation ceiling.** Human annotators disagree with each
+other by more than the models disagree with each other:
 
-- **Test set** = the strict intersection of all three annotators: **185 images / 28 subjects**.
-- **Target** = the per-pixel **2-of-3 majority vote** (not any single annotator's mask).
-- **Training** = **Paul's** non-intersection subjects only (831 imgs / 115 subjects → **697 train /
-  134 val**, subject-level split). Test subjects are structurally disjoint from training (0 overlap).
-
-This makes the evaluation a **cross-annotator generalisation test**, not an ordinary split.
-`n = 28` is a **ceiling, not a choice**: a 29th consensus subject cannot exist without new annotation.
-
-## 2. Models compared (5 core + 2 baselines)
-
-| Model | Role | Params | Input norm | Notes |
-|---|---|---|---|---|
-| SegFormer-B2 | teacher | 27.35 M | ImageNet | MiT-B2 encoder, 1-class head |
-| SegFormer-B0 direct | student | 3.71 M | ImageNet | trained on GT only |
-| SegFormer-B0 distilled | student | 3.71 M | ImageNet | calibrated soft-target KD, α=0.6 |
-| YOLO26n-sem direct | detector | 1.63 M | /255 | native Ultralytics recipe |
-| YOLO26n-sem distilled | detector | 1.63 M | /255 | offline teacher-fused pseudo-mask, α=0.4 |
-| U-Net (ResNet-50) | baseline | 32.52 M | ImageNet | `segmentation_models_pytorch` |
-| DeepLabV3+ (ResNet-50) | baseline | 26.68 M | ImageNet | `segmentation_models_pytorch` |
-
-All models emit a **single bruise logit at full resolution**, so the loss, threshold sweep, metric,
-and benchmark are architecture-blind.
-
-**Two important architecture notes**
-- YOLO must be fed **/255, not ImageNet-normalised** pixels — its BatchNorms carry running stats for
-  the /255 distribution; ImageNet norm silently caps it at Dice ≈ 0.479.
-- YOLO's head runs at **stride 8** (80×80 for a 640 input) vs SegFormer's **stride 4** (160×160) — a
-  4× coarser grid that is an architectural ceiling on boundary precision.
-
-## 3. Distillation
-
-- **SegFormer (online, α=0.6):** calibrated soft-target distillation
-  `L = α·DiceBCE(z_s, y) + (1−α)·BCE(z_s, σ(z_t / T_cal))`, where `T_cal` is a **calibration**
-  temperature fitted by minimising validation NLL (temperature scaling, Guo et al. 2017). This is
-  **not** the Hinton T² formulation — cite **Menon et al. 2021** (calibrated soft-target
-  distillation) for the formula; Hinton et al. 2015 is the conceptual ancestor.
-- **YOLO (offline, α=0.4):** the teacher can't be plugged into Ultralytics' trainer, so distillation
-  is done **before training** by fusing the teacher's probability into the label:
-  `class = (α·GT + (1−α)·teacher_prob ≥ 0.5)` (α<0.5 keeps it non-degenerate). YOLO then trains
-  normally on the resulting hard **pseudo-mask**.
-
-## 4. Evaluation & statistics
-
-- Everything is scored on a common **640×640** grid; masks resized with nearest-neighbour.
-- **Model selection** is on threshold-free validation AP; the decision threshold is **swept on
-  validation and applied once to test** (never fitted on test).
-- YOLO is reported **two ways**: **native argmax** (`.predict()`, its home turf, ~0.83 median) and
-  **custom /255** (same 640 geometry as SegFormer). The gap between them is a *preprocessing* effect,
-  not a threshold or resolution effect.
-- **Primary safety metric = complete-miss rate**: fraction of bruise-containing images that receive a
-  wholly empty predicted mask. A loose outline is correctable; a blank mask is a missed injury.
-- Because 185 images come from only **28 subjects**, all CIs are **subject-level cluster bootstraps**
-  (B=4000, resample subjects), and model-vs-model contrasts are **paired** (same resample scores both
-  models). `P(Δ>0)` is reported alongside each interval.
-- Fairness across skin tone uses **ITA** groups with Kruskal–Wallis (omnibus) + Mann–Whitney
-  (Bonferroni). It is **exploratory** at 9–17 subjects/group.
-
-## 5. Key results (val-selected best seed; see `docs/final_run_report.pdf`)
-
-| Model | Mean Dice | Median Dice | Miss % | FPS (A100) |
-|---|---|---|---|---|
-| SegFormer-B2 teacher | 0.7692 | 0.8192 | 0.00 | 29.7 |
-| SegFormer-B0 distilled | 0.7680 | 0.8167 | 0.00 | 60.1 |
-| SegFormer-B0 direct | 0.7663 | 0.8129 | 0.54 | 59.9 |
-| DeepLabV3+ (ResNet-50) | 0.7584 | 0.8183 | 2.16 | — |
-| U-Net (ResNet-50) | 0.7570 | 0.8329 | 3.78 | — |
-| YOLO26n distilled (native) | 0.7261 | 0.8012 | 2.16 | 121.7 |
-| YOLO26n direct (native) | 0.7021 | 0.8061 | 6.49 | 122.2 |
-
-**What's resolvable at n=28 (paired bootstrap):** distillation (+0.002) and student−teacher (−0.001)
-are **null**; SegFormer−YOLO (+0.066) and the **miss-rate gap** (YOLO-direct − B0-distilled, +6.49 pp)
-are **significant**. **Annotation ceiling:** the 3 experts agree with each other at only **0.639**
-mean Dice, and every model beats that — a model trained on Paul alone beats **Paul** against the
-consensus (+0.07 Dice, P≈0.98).
-
-**Recommendation:** ship **SegFormer-B0 distilled** — teacher-level accuracy at 2× speed / 7× fewer
-params, and the lowest miss rate. YOLO is 2× faster again but its 2–6 % blank-mask rate is
-disqualifying for injury documentation.
-
-## 6. Repository layout
-
-This repository is intentionally scoped to the **final run + its analysis + the baselines**.
-The three Colab notebooks are self-contained (they embed the library inline), so they run without
-the rest of the tree; `pipeline/` and the three generator scripts are included as the reference
-implementation.
-
-```
-bruise_colab_final.ipynb            The final run (5 models × 3 seeds, native YOLO, fairness).
-bruise_colab_final_analysis.ipynb   Best-seed re-inference, annotation ceiling, paired contrasts,
-                                    size confound, ~25 figures.
-bruise_colab_baselines.ipynb        U-Net / DeepLabV3+ through the identical recipe.
-
-pipeline/          Core library: data, models, losses, metrics, trainer, benchmark,
-                   YOLO stage + threshold/temperature, shared stage runners.
-scripts/           The three notebook generators (43 final, 44 analysis, 45 baselines)
-                   that emit the notebooks above from pipeline/.
-EXTRA/             Baseline trainers: train_smp_baselines.py (U-Net / DeepLabV3+),
-                   train_nnunet_baseline.py.
-configs/           paths.yaml, common_train.yaml, benchmark / model-registry yamls.
-tests/             Unit tests for pipeline/.
-docs/              LaTeX + PDF reports (final_run_report, pipeline_reference, …),
-                   figures, and explanatory markdown.
-results_final/     Aggregate result CSVs (per-seed, benchmark, fairness) — no raw data.
-```
-
-### The Colab notebooks
-| Notebook | Purpose |
+| Comparison | mean Dice |
 |---|---|
-| `bruise_colab_final.ipynb` | The final run: 5 models × 3 seeds, native YOLO (two eval paths), fairness. |
-| `bruise_colab_final_analysis.ipynb` | Best-seed re-inference, annotation ceiling, paired contrasts, size confound, ~25 figures. |
-| `bruise_colab_baselines.ipynb` | U-Net / DeepLabV3+ through the identical recipe. |
+| human: gbarimah vs majority | 0.873 |
+| human: erik vs majority | 0.866 |
+| **model: segformer_b2_teacher** | **0.769** |
+| **model: segformer_b0_direct** | **0.766** |
+| human: gbarimah vs erik | 0.755 |
+| **model: lraspp_mobilenetv3_b2kd** | **0.721** |
+| human: paul vs majority | 0.700 |
+| human: paul vs gbarimah | 0.581 |
 
-## 7. What is NOT in this repo (by design)
+The entire model field sits between `paul_vs_majority` (0.700) and
+`gbarimah_vs_erik` (0.755). **A 0.005 Dice gap between two models is not a
+result** — it is inside the noise floor of the labels themselves.
 
-The **dataset** (images, masks, individual-annotator labels), **model checkpoints/weights**,
-**pretrained backbones**, **run/evaluation output directories**, and **large archives** are *not*
-committed (see `.gitignore`). The NIJ bruise dataset is access-controlled; obtain it through the
-appropriate channel and point `configs/paths.yaml` at your local copy.
+Three consequences run through the whole codebase:
 
-## 8. Environment
+1. Lead with **complete-miss rate** (`dice == 0`), not mean Dice. The clinical
+   question is *was the bruise found at all*, not how neatly it was outlined.
+2. Never claim model X beats model Y on a sub-0.05 Dice difference without a
+   paired subject-level bootstrap whose interval excludes zero.
+3. Always show the annotation ceiling next to a model ranking.
+
+---
+
+## Stages
+
+| Stage | What it covers | Runs |
+|---|---|---|
+| **A** | SegFormer-B2 teacher, B0 direct, B0 distilled, YOLO26n direct + distilled | 15 |
+| **B** | U-Net and DeepLabV3+ (ResNet-50) baselines; nnU-Net registered as a gap | 6 |
+| **C** | SegFormer-B5 teacher and 10 knowledge-distillation arms | 13 |
+| **E** | Mobile baselines: PP-MobileSeg-Tiny, TopFormer-Tiny, LR-ASPP MobileNetV3, Fast-SCNN | 12 |
+| **F** | DeepLabV3+ → mobile-student distillation | 12 |
+| **H** | **Reliability-gated distillation** + SegFormer-B2 as teacher for every small student | 27 |
+| **D** | Descriptive analysis: distributions, bootstrap intervals, fairness, size confound, annotation ceiling | — |
+| **G** | Confirmatory significance: omnibus first, then a pre-specified contrast family with multiplicity control | — |
+
+---
+
+## Stage H — reliability-gated distillation
+
+The contribution this repository was extended for, and an honest null.
+
+### The failure it targets
+
+Stage F recorded a pre-registered failure: distilling DeepLabV3+ into LR-ASPP
+gained Dice but moved complete misses **3 → 5**, and into Fast-SCNN **7 → 13**
+with the skin-tone fairness gap widening 0.136 → 0.199.
+
+The mechanism is not subtle. Standard response KD regresses the student onto
+`sigmoid(teacher_logits / T)` at **every pixel of every image with one fixed
+weight**. On an image the teacher completely misses, that soft target is not
+weak — it is confidently, uniformly *empty*, applied with exactly the force it
+gets on an image the teacher got right. The student is told, with full
+confidence, that there is no bruise on precisely the images the clinical metric
+exists to catch.
+
+### The mechanism
+
+With `p` the calibrated teacher probability and `y ∈ {0,1}` the label:
+
+```
+per-pixel reliability   r  = 1 − |2p − 1| · |p − y|
+per-image gate          g  = clip((Dice_T − 0.10) / 0.40, 0, 1)     Dice_T = soft Dice
+weight                  w  = g · r
+coverage                   = mean(w)
+effective alpha         α' = α + (1 − α)(1 − coverage)
+loss                       = α' · supervised(GT) + (1 − α') · Σ(w · BCE) / Σw
+```
+
+| teacher is… | confidence | error | `r` | soft term |
+|---|---|---|---|---|
+| confidently right | ≈1 | ≈0 | ≈1 | full weight |
+| **uncertain** | ≈0 | any | **≈1** | **full weight** |
+| confidently wrong | ≈1 | ≈1 | ≈0 | suppressed |
+
+**The middle row is the design.** Down-weighting by error alone would delete
+exactly the pixels the teacher is unsure about — the dark knowledge distillation
+exists to transfer. Multiplying by confidence keeps uncertainty intact and
+removes only assertive error.
+
+There is **one teacher**, not two. The "second opinion" is the ground truth,
+which is available at training time and only at training time. The gate is
+therefore a training mechanism; the deployed student is an ordinary model and
+carries no gate.
+
+### Why it is a one-variable contrast
+
+`reliability_kd.self_test()` asserts three properties rather than claiming them:
+
+1. With `r ≡ 1, g ≡ 1` the loss **equals** `losses.DistillLoss` (measured 2.4e-07).
+2. A teacher asserting empty on a real bruise ⇒ `g = 0` ⇒ the loss equals
+   `losses.SupervisedLoss` exactly.
+3. `p = 0.5` ⇒ `r = 1`.
+
+Property 1 is why **α is not re-tuned** for gated arms — they inherit their
+control's α — and why `α'` hands the gated-away weight back to the supervised
+term instead of quietly lowering the effective KD weight.
+
+### Results
+
+The gate fired: **coverage 0.906**, effective α 0.638 against a nominal 0.600,
+**2.8 %** of image-views fully gated off, 1.9 % teacher near-misses. Neither
+degenerate case (gate inert, or gate eating the arm) occurred.
+
+And it changed nothing measurable:
+
+| contrast (teacher and α held fixed) | Δ Dice | 95 % CI | verdict |
+|---|---|---|---|
+| `segformer_b0_rgkd` − `segformer_b0_distilled` | −0.0024 | [−0.0156, +0.0110] | INCONCLUSIVE |
+| `lraspp_mobilenetv3_rgkd` − `lraspp_mobilenetv3_b2kd` | +0.0033 | [−0.0133, +0.0204] | INCONCLUSIVE |
+| `fastscnn_rgkd` − `fastscnn_b2kd` | −0.0087 | [−0.0321, +0.0140] | INCONCLUSIVE |
+
+Complete misses did not move either, and the two mobile gate contrasts are
+sign-inconsistent across seeds (1 of 3 positive). **Reported as the null it is.**
+
+What *did* land, each interval excluding zero:
+
+| contrast | Δ Dice | 95 % CI |
+|---|---|---|
+| **B2 vs DeepLabV3+ teacher** (Fast-SCNN, KD method fixed) | **+0.0343** | [+0.0084, +0.0593] |
+| KD vs no KD (LR-ASPP) | +0.0265 | [+0.0065, +0.0517] |
+| KD vs no KD (Fast-SCNN) | +0.0364 | [+0.0045, +0.0659] |
+
+The teacher swap is the result that justifies the stage: same student, same
+recipe, same α, and only the teacher changes — it reverses Stage F's null.
+
+The most interesting result is not about the gate at all. On Fast-SCNN the ITA
+fairness gap goes **0.160 (p = 0.021, significant)** with no KD → **0.064
+(p = 0.358, not significant)** with plain B2 response KD → **0.142 (p = 0.029,
+significant again)** with gating. A B2 teacher removes a skin-tone gap that
+neither the direct model nor the DeepLabV3+ arm removes, and gating undoes it.
+That is the pre-registered primary endpoint. At 28 subjects it is a single
+comparison — flag it, do not over-read it.
+
+**Not run:** `yolo_sem_rgkd`. The gate for YOLO's offline pseudo-mask route is
+implemented and tested (`build_gated_yolo_dataset`) but deliberately
+unregistered, so every confirmatory Stage H result tests the gate on an *online*
+loss only. Re-enabling is three lines; see `PROJECT_HANDBOOK.md` §14 gap 2b.
+
+---
+
+## Method notes that are easy to get wrong
+
+**The loss is not Hinton KD.** No `T²` term, and the student's logits are not
+temperature-scaled. `T` is a *calibration* temperature fitted by NLL on
+validation (Guo et al. 2017, L-BFGS on `log T`), so the teacher is used as a
+better-calibrated estimate of P(bruise | pixel). Cite Menon et al. (2021), not
+Hinton et al. (2015).
+
+**Normalisation belongs to the model, not the loader.** The dataloader emits raw
+`[0,1]` pixels. SegFormer applies ImageNet statistics; YOLO applies plain `/255`,
+because Ultralytics' BatchNorms carry frozen running statistics for that
+distribution. Feeding YOLO ImageNet-normalised pixels caps it at 0.479 Dice with
+**no threshold able to recover it**.
+
+**The threshold is not the argmax.** The logit cut is swept over 481 values on
+the 134 validation images. These sweeps are extraordinarily flat — B2's val Dice
+moved 0.009 across thresholds from 0.154 to 0.959 — so the argmax fits the
+validation set's sampling error. Every cut within **one standard error** of the
+peak is treated as tied and the tie is broken by **lowest complete-miss rate**.
+A checkpoint without its `operating_point.json` is unusable; the registry
+enforces this.
+
+**Two definitions of "complete miss" exist in the codebase.**
+`metrics.summarize` counts `pred_positive == 0`; `report.normalize` counts
+`dice == 0`. The first is a strict subset — it misses the case where a model
+fires confidently on the wrong region, which is still a complete miss to a
+clinician. **All reported tables use `dice == 0`.**
+
+**Significance resamples subjects, not images.** 185 test images come from 28
+subjects and images of the same bruise are strongly correlated; resampling
+images would give intervals ≈ √(185/28) ≈ 2.6× too narrow. Contrasts are paired
+on the same resampled subject list, evaluated at 10 000 draws, on three
+endpoints from one set of draws, with Holm–Bonferroni inside a comparison list
+fixed before the models were trained. `INCONCLUSIVE` is kept separate from
+`NON-INFERIOR`: calling a wide interval "equivalent" reports absence of evidence
+as evidence of absence.
+
+---
+
+## Repository layout
+
+```
+BRUISE_UNIFIED/
+├── bruise_unified.ipynb        the notebook — 78 cells, seven stages
+├── PROJECT_HANDBOOK.md         the reference: every decision and why
+├── requirements.txt
+└── bruisekit/                  the library
+    ├── data.py                 dataset, loaders, augmentation (emits raw [0,1])
+    ├── models.py               SegFormerNet, YoloSemNet, build_param_groups
+    ├── losses.py               DiceBCE, SupervisedLoss, DistillLoss
+    ├── metrics.py              per-image Dice/IoU, threshold-free AP
+    ├── engine.py               the training loop, resume contract, calibration
+    ├── sweep.py                threshold sweep and cut selection
+    ├── evaluate.py             scoring, fairness, speed benchmark
+    ├── paths.py                the only host-aware module
+    ├── registry.py             the train-or-skip brain (three tiers)
+    ├── loaders.py              run → live model → test numbers
+    ├── report.py               per-image CSV → tables (descriptive)
+    ├── significance.py         omnibus, contrast family, multiplicity
+    ├── efficient_models.py     the four mobile architectures
+    ├── distill_efficient.py    Stage F: DeepLabV3+ → mobile KD shim
+    ├── reliability_kd.py       Stage H: the gated loss and its shims
+    ├── weights.py              backbone download, verify, provenance
+    ├── mmcv_shim.py            minimal mmcv stand-in
+    ├── vendor/                 StrideFormer, PP-MobileSeg, TopFormer — verbatim
+    └── kd/                     Stage C distillation suite — vendored unmodified
+
+scripts/
+├── unified_lib/                source of truth for the ★ modules above
+├── 60_build_unified_bundle.py  assemble + verify the bundle
+├── 61_generate_unified_notebook.py   emit the notebook
+├── 62_zip_unified_bundle.py    package the full bundle
+├── 63_zip_rgkd_overlay.py      package a code-only patch overlay
+├── 70_b2_teacher_significance.py     contrasts against the B0-direct boundary
+├── 74_generate_b2_decks.py     the result decks (mean and median endpoints)
+├── 75_generate_meeting_cheatsheet.py formulas and shapes, .tex + .pdf
+└── vendor_efficient_nets.py    refresh the vendored architectures
+
+docs/                           LaTeX sources and scope notes
+```
+
+**The notebook and `bruisekit/*.py` are build artefacts.** Edit
+`scripts/unified_lib/` and re-run the generators; a direct edit is reverted by
+the next build. This is why the generator scripts ship alongside the output.
+
+---
+
+## Design principles
+
+**Thin notebook, fat library.** Every notebook cell is config, a call into
+`bruisekit`, or a rendering of what came back. No cell defines a model, a metric
+or a training loop.
+
+**The registry decides before any compute happens.** Every run resolves to one
+of three tiers and the plan is printed before a single gradient is computed:
+
+| Tier | Meaning | Cost |
+|---|---|---|
+| **WEIGHTS** | a usable checkpoint exists | nothing trains |
+| **RESULTS** | no checkpoint, but metrics were recorded | nothing trains; labelled `cached` |
+| **MISSING** | neither | the only case where training is proposed |
+
+**Fail loud, never silently.** A MISSING run stays missing in every table it
+would have fed. It is never dropped, never back-filled from a neighbouring seed,
+never averaged away. A contrast whose models are absent is **named** as skipped.
+
+**Runtime shims, not edits to tested code.** `engine.py`, `losses.py` and
+`yolo_native.py` are extracted verbatim from the notebook they were developed
+in, so an edit there is reverted by the next build. New teachers and new losses
+are installed by rebinding module globals at runtime, and every shim is inert
+outside its own context — so adding Stage H cannot change a Stage A number.
+
+**One shared recipe.** Identical LR split, schedule, loss, batch policy and
+seeds across every architecture. If a model needs different hyperparameters to
+work, that is a finding to report, not a knob to turn.
+
+---
+
+## Running it
 
 ```bash
-conda env create -f environment.yml   # CPU-only torch; see the file header for the GPU pip step
-# core deps: torch, transformers, ultralytics, segmentation-models-pytorch,
-#            albumentations, opencv-python-headless, pandas, scipy, optuna, pytest
+pip install -r BRUISE_UNIFIED/requirements.txt
+jupyter lab BRUISE_UNIFIED/bruise_unified.ipynb
 ```
 
-## 9. Reproducing the headline numbers
+Everything is controlled from the first cell:
 
-1. Obtain the dataset and set paths in `configs/paths.yaml`.
-2. Run `bruise_colab_final.ipynb` (train 5 models × 3 seeds → `results_final/`).
-3. Run `bruise_colab_baselines.ipynb` for U-Net / DeepLabV3+.
-4. Run `bruise_colab_final_analysis.ipynb` for the annotation ceiling, paired contrasts, and figures.
-5. All report numbers are read directly from the run CSVs — nothing is hand-transcribed.
+```python
+RUN_STAGES     = "ABCDEH"   # any subset
+ALLOW_TRAINING = False      # True only if you intend to spend GPU-hours
+RECOMPUTE_FROM_WEIGHTS = False
+EFFICIENT_SEEDS = (0, 1, 2)
+RGKD_SEEDS      = None      # None = same as EFFICIENT_SEEDS
+```
 
-## 10. Licensing note
+With the defaults and the data bundle present, *Run All* reproduces every table
+and figure from cached per-image results in about 30 seconds on a laptop with no
+GPU. `ALLOW_TRAINING = True` trains the 51 Stage E/F/H runs, ≈40 GPU-hours,
+resumable — anything with a `DONE.json` is skipped.
 
-For a non-commercial forensic tool both families are usable, but licenses differ: SegFormer's
-pretrained weights carry an **NVIDIA non-commercial** license, and Ultralytics/YOLO is **AGPL-3.0**
-(network copyleft). On both accuracy-safety (misses) and license risk, SegFormer is the preferable
-deployment target, with YOLO retained as a fast baseline.
+Verify the gate before spending GPU time:
 
-## Key references
-- Xie et al., *SegFormer*, NeurIPS 2021.
-- Jocher et al., *YOLO26*, arXiv:2606.03748, 2026.
-- Guo et al., *On Calibration of Modern Neural Networks*, ICML 2017 (temperature scaling).
-- Menon et al., *A Statistical Perspective on Distillation*, ICML 2021 (calibrated soft-target KD).
-- Hinton et al., *Distilling the Knowledge in a Neural Network*, 2015 (KD, conceptual origin).
-- Milletari et al., *V-Net* (Dice loss), 3DV 2016.
-- Chardon et al., *Individual Typology Angle*, 1991 (objective skin tone).
-- Efron & Tibshirani, *An Introduction to the Bootstrap*, 1993.
+```python
+from bruisekit import reliability_kd as RK
+RK.self_test()      # 5 checks, CPU, under a second; raises on failure
+```
+
+**On an offline cluster node,** export `BRUISE_NO_PIP=1` before starting the
+kernel. Optional heavyweight dependencies (`ultralytics`,
+`segmentation-models-pytorch`) are installed only at the point a run that needs
+them is about to be built, and this turns a missing package into a named error
+rather than minutes of pip retry backoff.
+
+---
+
+## Data availability
+
+The dataset is **1016 white-light photographs of bruises on 143 human subjects**,
+with expert annotations. It is not in this repository and will not be:
+
+- no images or masks
+- no manifests, split definitions or per-subject skin-tone (ITA) labels
+- no trained checkpoints or pretrained backbones
+- no per-image result tables
+
+`.gitignore` excludes these by explicit path as well as by pattern, so a future
+directory rename cannot silently start publishing patient photographs.
+
+The one derived table that *is* included is
+`BRUISE_UNIFIED/interlabeler_agreement_640.csv` — per-image Dice between human
+annotators, the annotation ceiling of §1. It carries no images and no identifiers
+beyond pseudonymous image stems.
+
+**Consequence: this repository is not runnable end-to-end as published.** It is
+the complete method, not a reproducible artefact. Access to the data is a
+separate question governed by the consent scope of the photographs, not by a
+licence file.
+
+---
+
+## Known gaps
+
+Reported rather than omitted, because "the baseline we did not run" is exactly
+what a reader needs:
+
+1. **nnU-Net** — never run on the canonical 697/134 split. Registered as a gap;
+   needs `nnunetv2` and ≈8 GPU-hours.
+2. **`x_dkd_b5_to_b0`** — a Stage C arm configured but never executed.
+3. **`yolo_sem_rgkd`** — implemented and tested, deliberately unregistered
+   (above). Note that an *unregistered* family is invisible to the registry, so
+   `PROJECT_HANDBOOK.md` §14 is the only record it is owed.
+4. **Speed tables span two devices** — Stage A on a full A100, Stage E on an
+   A100 MIG 3g.40gb slice. Not comparable; re-time on one device before
+   publishing a latency claim.
+5. **28 test subjects** is a small denominator. Most fairness comparisons are not
+   significant and must not be reported as if they were.
+
+`PROJECT_HANDBOOK.md` §15 documents sixteen traps hit during development and the
+automated guard added for each — including two dependency-install regressions,
+a patched notebook that kept running its old cells, and a `transformers` version
+refactor that silently renames every SegFormer state-dict key.
+
+---
+
+## Documentation
+
+| File | Contents |
+|---|---|
+| `BRUISE_UNIFIED/PROJECT_HANDBOOK.md` | the reference — every stage, decision, result and trap |
+| `docs/reliability_gated_kd_scope.md` | Stage H scope note, pre-registered before the runs, outcome appended after |
+| `docs/bruise_meeting_cheatsheet.tex` | losses, formulas, tensor shapes, hyperparameters — one place |
+| `docs/b5_distillation_scope.md` | Stage C scope |
+
+Build the PDFs and decks with `scripts/74_*` and `scripts/75_*`; the LaTeX
+sources are tracked, the built binaries are not.

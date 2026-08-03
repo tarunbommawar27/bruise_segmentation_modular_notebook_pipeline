@@ -1,0 +1,24 @@
+# Core -- every stage needs these.
+torch>=2.2
+torchvision>=0.17
+transformers>=4.40,<6
+albumentations>=2.0,<3
+opencv-python-headless>=4.9
+numpy>=1.24
+pandas>=2.0
+scipy>=1.11
+matplotlib>=3.7
+pyyaml
+tqdm
+
+# Stage A -- YOLO (native Ultralytics training and argmax inference).
+ultralytics>=8.4,<9
+
+# Stage B -- U-Net / DeepLabV3+ wrappers.
+segmentation-models-pytorch>=0.3.3
+
+# Stage C -- optional: the KD alpha search falls back to a grid without it.
+optuna>=3.5
+
+# Stage B nnU-Net -- OFF by default; install only if you intend to train it.
+# nnunetv2>=2.5

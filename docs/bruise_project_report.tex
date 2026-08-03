@@ -1,0 +1,266 @@
+\documentclass[11pt]{article}
+\usepackage[a4paper,margin=1in]{geometry}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{amsmath,amssymb}
+\usepackage{xcolor}
+\usepackage{fancyhdr}
+\usepackage{enumitem}
+\usepackage[colorlinks=true,linkcolor=black,urlcolor=black,citecolor=black]{hyperref}
+
+\definecolor{secblue}{RGB}{31,73,125}
+\definecolor{boxgray}{RGB}{244,246,249}
+\usepackage{sectsty}
+\sectionfont{\color{secblue}\large}
+\subsectionfont{\color{secblue}\normalsize}
+\usepackage[most]{tcolorbox}
+
+\pagestyle{fancy}\fancyhf{}
+\renewcommand{\headrulewidth}{0.4pt}
+\lhead{\small Bruise Segmentation}\rhead{\small Project Report}\cfoot{\thepage}
+
+\newcolumntype{R}{>{\raggedleft\arraybackslash}p{1.9cm}}
+\setlength{\parindent}{0pt}\setlength{\parskip}{5pt}
+\newtcolorbox{keybox}{colback=boxgray,colframe=secblue,boxrule=0.6pt,arc=2pt,
+  left=8pt,right=8pt,top=6pt,bottom=6pt}
+
+\begin{document}
+
+\begin{center}
+  {\LARGE\bfseries Fairness-Aware Bruise Segmentation}\\[3pt]
+  {\large A Project Report: Core Models, Baselines, Capacity Scaling, and Knowledge Distillation}\\[3pt]
+  {\small White-light bruise photographs \, $\cdot$ \, SegFormer / YOLO / U-Net / DeepLab \, $\cdot$ \, ITA skin-tone groups}
+\end{center}
+
+\vspace{2pt}
+
+\begin{keybox}
+\textbf{Scope.} This report documents the full experimental arc of the project: (1) the five
+core models trained on Colab (SegFormer-B2 teacher, SegFormer-B0 direct/distilled, YOLO26n-sem
+direct/distilled); (2) two classical CNN baselines (U-Net, DeepLabV3+); (3) the largest-capacity
+SegFormer-B5; and (4) the ongoing knowledge-distillation study. All models use one fixed protocol
+(697/134/185 subject-grouped split, $640{\times}640$, scored against a 2-of-3 consensus mask).
+Numbers are reported honestly with multi-seed variability where available.
+\end{keybox}
+
+\section{Task and Protocol}
+
+The goal is pixel-level segmentation of bruises in white-light (WL) photographs, evaluated for
+\emph{equity across skin tone}. The dataset is a multi-labeler study: each image was annotated by
+three raters, and the segmentation target is their \textbf{2-of-3 majority-vote consensus mask}.
+
+\begin{center}\small
+\begin{tabular}{ll}
+\toprule
+Split & 697 train / 134 val / 185 test images (subject-grouped, no subject leakage) \\
+Test subjects & 28 \\
+Resolution & $640\times640$ (bilinear image, nearest mask) \\
+Skin tone & Individual Typology Angle (ITA), 5 groups (Light $\to$ Dark) \\
+Selection & best epoch on val Dice; decision threshold swept on val; scored \emph{once} on test \\
+Primary metrics & median/mean Dice, \textbf{complete-miss rate} (blank mask on a real bruise) \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\textbf{Inter-annotator context.} On the same 185 test images, pairwise annotator agreement (Dice)
+ranges $0.58$--$0.75$ (three-pair mean $\approx0.64$); annotator-vs-consensus ranges $0.70$--$0.87$.
+These indicate substantial human labeling variability and are reported as \emph{context} only ---
+annotator-vs-annotator and model-vs-consensus Dice are not directly comparable.
+
+\section{Phase 1 --- Core Models (Colab)}
+
+Five models trained with one shared recipe (SegFormer: Dice+BCE, AdamW backbone/head LR split
+$6\!\times\!10^{-5}/6\!\times\!10^{-4}$, warmup$\to$poly, AMP, effective batch 8; YOLO: native
+Ultralytics recipe). Distillation used calibrated response-based KD (temperature-scaled soft
+targets). Results are the \textbf{mean over 3 seeds}; YOLO is reported on its native-argmax path.
+
+\begin{center}\small
+\begin{tabular}{l R R R R}
+\toprule
+Model & Params (M) & Mean Dice & Median Dice & Miss (\%) \\
+\midrule
+SegFormer-B2 teacher       & 27.35 & $0.7651$ & $0.8113$ & $0.00$ \\
+SegFormer-B0 direct        & 3.71  & $0.7600$ & $0.8113$ & $0.54$ \\
+SegFormer-B0 distilled     & 3.71  & $0.7639$ & $0.8114$ & $0.18$ \\
+YOLO26n-sem direct         & 1.63  & $0.6911$ & $0.8021$ & $7.57$ \\
+YOLO26n-sem distilled      & 1.63  & $0.6676$ & $0.7658$ & $7.57$ \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\noindent\textbf{Findings.}
+\begin{itemize}[leftmargin=1.4em,itemsep=1pt]
+  \item \textbf{Distillation preserves/matches the teacher at $7.4\times$ fewer parameters}: the
+  3.7M distilled B0 (mean $0.7639$) is statistically indistinguishable from the 27M B2 teacher
+  (mean $0.7651$), and beats the direct-trained B0 --- the compact student loses essentially nothing.
+  \item \textbf{Complete-miss is the discriminating metric, and it separates the architectures}:
+  all SegFormers miss $\le0.5\%$ of bruises entirely, whereas YOLO misses $\approx7.6\%$ --- a
+  high-consequence failure for an injury-documentation tool. YOLO's higher \emph{median} Dice is
+  misleading given this miss rate.
+  \item YOLO's ImageNet-normalization/scale handling was a known pitfall; native-argmax is the sole
+  correct reporting path (the custom-/255 path is excluded).
+\end{itemize}
+
+\section{Phase 2 --- Classical CNN Baselines}
+
+To place the transformers against standard segmentation CNNs, U-Net and DeepLabV3+ (both
+ResNet-50 encoders, \texttt{segmentation\_models\_pytorch}) were trained with the same split,
+resolution, and evaluation (3 seeds).
+
+\begin{center}\small
+\begin{tabular}{l R R R R}
+\toprule
+Model & Params (M) & Mean Dice & Median Dice & Miss (\%) \\
+\midrule
+U-Net (ResNet-50)       & $\sim$32 & $0.7526$ & $0.8260$ & $3.24$ \\
+DeepLabV3+ (ResNet-50)  & $\sim$40 & $0.7453$ & $0.8140$ & $1.80$ \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\textbf{Finding.} The CNN baselines are competitive --- U-Net's \emph{median} Dice ($0.8260$) is
+actually the highest of the pre-distillation models --- but they miss more bruises entirely
+($1.8$--$3.2\%$) than the SegFormers ($\le0.5\%$). No single architecture dominates on all metrics.
+
+\section{Phase 3 --- Capacity Scaling: SegFormer-B5}
+
+SegFormer-B5 ($\sim$85M, the largest MiT encoder) was trained with the identical recipe to test
+whether more capacity raises the ceiling. (Result below is a single seed; the 3-seed run is
+in progress.)
+
+\begin{center}\small
+\begin{tabular}{l R R R R}
+\toprule
+Model & Params (M) & Mean Dice & Median Dice & Miss (\%) \\
+\midrule
+SegFormer-B5 (1 seed) & $\sim$85 & $0.7829$ & $0.8276$ & $0.00$ \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\begin{keybox}
+\textbf{Central observation across Phases 1--3.} Across seven very different architectures
+(1.6M YOLO $\to$ 85M B5; CNN and transformer), median Dice sits in a narrow band ($0.766$--$0.828$)
+and B5 ($0.828$) barely exceeds the 3.7M distilled B0 ($0.811$) and the U-Net baseline ($0.826$).
+\emph{Increasing model capacity alone gives diminishing returns under the current data and
+evaluation protocol} --- the bottleneck appears more data/label-related than capacity-related. This
+is stated as an observation, not a proven ``ceiling'': the validation oracle (\S5) shows there is
+still headroom that a \emph{combination} of models can reach.
+\end{keybox}
+
+\section{Phase 4 --- Knowledge-Distillation Study (current)}
+
+Given the above, the distillation study is framed not around beating the teacher on Dice (which is
+flat) but around: \textbf{can a compact 3.7M student preserve overall quality while reducing
+high-consequence failures and deployment cost?} It uses the best-of-3-seed B5 (selected on val,
+temperature $T{=}2.20$) and the B2 teacher, distilling into B0.
+
+\subsection{The multi-teacher gate (validation oracle)}
+Before committing to multi-teacher methods, a subject-cluster bootstrap on \emph{validation} tested
+whether B2 and B5 are complementary:
+
+\begin{center}\small
+\begin{tabular}{l R}
+\toprule
+Quantity (validation) & Value \\
+\midrule
+Spearman(B2 Dice, B5 Dice) & $0.82$ \\
+Images B5 beats B2 by $>0.10$ / vice-versa & $18$ / $12$ \\
+Oracle (best-teacher-per-image) gain over best single & $+0.0258$ \\
+\quad 95\% CI & $[0.0165,\ 0.0362]$ \\
+\quad $P(\text{gain}>0)$ & $1.00$ \\
+Adaptive gate & \textbf{PASS} (run multi-teacher) \\
+Reliability weight $\mathrm{rel}_b$ (B5) & $0.634$ \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\textbf{Interpretation.} B2 and B5 make genuinely different errors; a perfect per-image selector
+gains $\sim$2.6 Dice points over either single teacher (CI clear of zero). So the single-model
+Dice is \emph{not} a hard ceiling --- combining complementary teachers has real, measured headroom.
+This decision was made on validation only; the test set is untouched.
+
+\subsection{Methods under test}
+All KD terms are additions to the calibrated response loss
+$\mathcal{L}=\alpha\,\mathrm{DiceBCE}(z_s,y)+(1-\alpha)\,\mathrm{BCE}(z_s,\sigma(z_t/T))$.
+The mix $\alpha$ is searched on validation (grid; Optuna if available).
+
+\begin{center}\small
+\begin{tabular}{l l}
+\toprule
+Arm & What it transfers \\
+\midrule
+Response KD & calibrated teacher probabilities (baseline) \\
+CWD (ICCV'21) & per-channel spatial distributions (canonical seg-KD baseline) \\
+BPKD (WACV'24) & boundary vs body knowledge, separately \\
+Angular (WACV'24) & feature \emph{direction} (scale-robust for the B5$\to$B0 gap) \\
+DKD (CVPR'22) & decoupled target / non-target logits (lower priority in binary seg) \\
+Uniform ensemble & $\tfrac12(p_{B2}+p_{B5})$ \\
+\textbf{Reliability-gated (novel)} & per-pixel confidence$\times$disagreement gate, val-derived $\mathrm{rel}_b$ \\
+\quad + boundary / + hard / + group / + full & one component added at a time (ablation) \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+The novel method combines the reliability gate with paired WL/ALS potential, failure-risk
+weighting, and boundary knowledge --- teacher mixing itself is not new (cf.\ HeteroAKD, AAAI'25),
+the combination is.
+
+\subsection{Success hierarchy (pre-registered)}
+Because Dice is flat, success is judged in priority order:
+(1) \textbf{non-inferiority in subject-level Dice} (margin 0.03);
+(2) reduction in \textbf{complete-miss and the low-recall tail} (\%recall$<$0.10, \%Dice$<$0.20,
+5th-percentile subject Dice);
+(3) improved \textbf{small-bruise recall};
+(4) improved \textbf{worst-ITA-group recall} (exploratory);
+(5) lower \textbf{deployment cost}. Every comparison uses the paired subject-cluster bootstrap
+(28 subjects) against the B2$\to$B0 reference. TTA is reported separately as an inference-only
+baseline.
+
+\subsection{Early result}
+The first completed arm, B5$\to$B0 response KD (validation-searched $\alpha=0.625$):
+
+\begin{center}\small
+\begin{tabular}{l R R R R R}
+\toprule
+Arm & Mean Dice & Median Dice & Miss (\%) & \%rec$<$.10 & worst-grp Dice \\
+\midrule
+B5$\to$B0 response & $0.7683$ & $0.8061$ & $0.00$ & $2.2$ & $0.7587$ \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\noindent In line with expectation: overall Dice tracks the B0-distilled reference, with $0\%$
+complete miss --- the interesting comparisons (uniform vs reliability-gated ensemble, and the
+failure-tail metrics) come from the arms still training.
+
+\section{Status and Reproducibility}
+
+\textbf{Running now (ORC, one GPU, resumable):} the full arm matrix --- response, CWD, BPKD,
+uniform ensemble, reliability-gated adaptive + four ablations, angular, DKD --- each with
+epoch-level resume (an interrupted run is never scored or marked done) and validation-based
+$\alpha$ search. A single aggregate report then labels each arm
+\textbf{REPORTABLE WIN / NON-INFERIOR / INFERIOR} vs the B2$\to$B0 reference on the hierarchy above.
+
+\textbf{Deferred / next:} YOLO distillation from the winning teacher configuration (YOLO is the
+real weakness at $\sim$7.6\% miss); a data-merge $2\times2$ factor; and, to actually test the
+``are we near the data limit?'' question, data-scaling and re-annotation experiments (distillation
+alone cannot answer it).
+
+\textbf{One-line summary of the whole project.}
+\begin{keybox}
+Seven architectures (CNN and transformer, 1.6M--85M) cluster tightly on Dice, a 3.7M distilled
+student already matches a 27M teacher, and validation shows two teachers are complementary with
+$\sim$2.6-point oracle headroom --- so the distillation study asks how to transfer that complementary
+knowledge into the compact student while cutting the high-consequence failures (complete miss,
+worst-group, small-bruise) that Dice hides.
+\end{keybox}
+
+\vfill
+\begin{center}\footnotesize\itshape
+Numbers: Colab core models and CNN baselines are 3-seed means (native-argmax for YOLO);
+SegFormer-B5 is a single seed (3-seed in progress). All scored on the 185-image consensus test set
+under one fixed protocol. Distillation arms use a locked re-evaluation for cross-arm comparability.
+\end{center}
+
+\end{document}
