@@ -9,10 +9,22 @@ SegFormer-B5 distillation grid, four mobile-scale architectures, two
 cross-architecture distillation axes, a descriptive analysis suite and a
 confirmatory significance layer.
 
+**v2.0** adds six pre-registered experiment stages on top of that: multi-teacher
+routing, four foundation-encoder comparisons, and a miss/fairness analysis suite.
+All six returned nulls, which is the point — see
+[Added in v2.0](#added-in-v20--the-pretraining-and-routing-campaign).
+
 > **No data, no weights in this repository.** The study uses 1016 clinical
-> photographs of 143 human subjects. Neither the images, the masks, nor the 27
-> trained checkpoints are published here. See
-> [Data availability](#data-availability) below.
+> photographs of 143 human subjects. Neither the images, the masks, nor the
+> trained checkpoints are published here — nor the 1.4 GB Fenwick labeler set.
+> See [Data availability](#data-availability) below.
+
+### Versions
+
+| Tag | What it is |
+|---|---|
+| `v1.0-notebooks` | The seven-stage modular pipeline, before the analysis campaign. `git checkout v1.0-notebooks` |
+| `v2.0` | This version — adds Stages M/N/N2/N3/N4/O, the analysis modules, packaging and tests |
 
 ---
 
@@ -58,6 +70,44 @@ Three consequences run through the whole codebase:
 | **H** | **Reliability-gated distillation** + SegFormer-B2 as teacher for every small student | 27 |
 | **D** | Descriptive analysis: distributions, bootstrap intervals, fairness, size confound, annotation ceiling | — |
 | **G** | Confirmatory significance: omnibus first, then a pre-specified contrast family with multiplicity control | — |
+
+### Added in v2.0 — the pretraining and routing campaign
+
+Each is a standalone notebook plus a module, gated on validation before any
+training. **Every one returned a null, and the nulls are the contribution** —
+they close questions earlier stages settled by assertion.
+
+| Stage | Question | Outcome |
+|---|---|---|
+| **M** | Route distillation per image over a teacher pool? | Gate opened; all six contrasts inconclusive, miss rate slightly worse |
+| **N** | Frozen probe: MedSigLIP vs DINOv2 vs ResNet-50 | Medical caption encoder loses by 0.166 |
+| **N2** | Derm caption pretraining, frozen probe | Gate closed; DermLIP − DINOv2 = −0.091 |
+| **N3** | The same, encoder unfrozen | DINOv2-FT 0.790 test / 0 misses, but does not separate from B2 or B0 |
+| **N4** | **Corpus vs objective** — SAM (natural) vs MedSAM (medical), both mask-pretrained | `medsam − sam` = +0.004, CI spans zero. A 1.5 M-pair medical corpus buys nothing |
+| **O** | Miss taxonomy, distilled-arm fairness, **ITA-group-routed** distillation | Two analyses delivered; the routing arm is gated *shut* |
+
+**Stage O's gate added a clause the earlier ones lacked.** Stage C's gate opened
+on +0.026 of teacher headroom and its arm delivered +0.007; Stage M's opened on
++0.048 and returned six inconclusive contrasts. Both measured headroom that
+genuinely existed. Neither asked whether the **routing key was estimable** — and
+across six candidate teachers the per-ITA-group best teacher survives resampling
+the 20 validation patients only 36–52 % of the time. Stage O refuses to train on
+a key that unstable and publishes the identifiability table as the finding.
+
+### Two v2.0 results to know before reading any table
+
+**"Complete miss" is two different failures.** `dice == 0` is the union of *the
+model predicted nothing* and *the model outlined the wrong region with zero
+overlap*. They differ in 28 of 35 models. Field-wide, roughly **one miss in three
+is a confident wrong answer**, not a blank — and the best distillation arm fails
+*exclusively* that way. `itakd.miss_taxonomy` reports all three columns, with
+`wrong_place` derived as `zero_dice − empty_pred` so they cannot fail to add up.
+
+**Lesion size is confounded with skin tone in this test set.** Photographs of
+light skin are ~1.8× more likely to contain a small bruise (59 % vs 33 %). Part of
+every unconditioned "worse on light skin" number is a size effect wearing a
+skin-tone label. `lesionsize.fairness_conditioned` reports each gap twice —
+marginally, and within the small-lesion stratum.
 
 ---
 
@@ -230,25 +280,73 @@ BRUISE_UNIFIED/
     ├── weights.py              backbone download, verify, provenance
     ├── mmcv_shim.py            minimal mmcv stand-in
     ├── vendor/                 StrideFormer, PP-MobileSeg, TopFormer — verbatim
-    └── kd/                     Stage C distillation suite — vendored unmodified
+    ├── kd/                     Stage C distillation suite — vendored unmodified
+    │
+    │   ── v2.0: analysis ──────────────────────────────────────────────
+    ├── lesionsize.py           GT-area deciles, small-lesion stratum, the
+    │                           ITA-conditioned fairness table
+    ├── allmodels.py            cross-root discovery + cohorting: every model
+    │                           with a per-image table anywhere, on any host
+    ├── fenwick_cv.py           matched-core labeler cross-validation
+    ├── gpustate.py             clock/power/throttle beside every speed number
+    │
+    │   ── v2.0: experiment stages (NOT in the bundle build) ───────────
+    ├── multiteacher.py         Stage M: per-image routed KD + its oracle gate
+    ├── foundation.py           Stage N: frozen foundation-encoder probe
+    ├── dermprobe.py            Stage N2: _ProbeBase, the arm contract
+    ├── finetune_n3.py          Stage N3: unfrozen probe + ConvDecodeHead
+    ├── samprobe.py             Stage N4: SAM / MedSAM encoders at 640
+    └── itakd.py                Stage O: miss taxonomy, distilled-arm fairness,
+                                ITA-group-routed KD and its gate
+
+BRUISE_UNIFIED/
+├── bruise_stage_{m,n3,n4,o}.ipynb    one notebook per experiment stage
+├── bruise_{foundation,derm_probe,lesion_size,all_models,fenwick_cv}.ipynb
+├── bruise_inference_all.ipynb        re-inference over every model
+├── run_stage_{n4,o}.py, run_all_models.py    the same, from a shell
+├── pyproject.toml                    pip install -e .
+├── tests/                            pytest over every module's self_test()
+└── *_RESULTS/                        per-image CSVs, gates, fairness tables
 
 scripts/
 ├── unified_lib/                source of truth for the ★ modules above
 ├── 60_build_unified_bundle.py  assemble + verify the bundle
 ├── 61_generate_unified_notebook.py   emit the notebook
-├── 62_zip_unified_bundle.py    package the full bundle
-├── 63_zip_rgkd_overlay.py      package a code-only patch overlay
-├── 70_b2_teacher_significance.py     contrasts against the B0-direct boundary
-├── 74_generate_b2_decks.py     the result decks (mean and median endpoints)
-├── 75_generate_meeting_cheatsheet.py formulas and shapes, .tex + .pdf
+├── 69–84                       one generator + one zip builder per stage
 └── vendor_efficient_nets.py    refresh the vendored architectures
 
 docs/                           LaTeX sources and scope notes
 ```
 
-**The notebook and `bruisekit/*.py` are build artefacts.** Edit
+**The notebook and the ★ `bruisekit/*.py` are build artefacts.** Edit
 `scripts/unified_lib/` and re-run the generators; a direct edit is reverted by
 the next build. This is why the generator scripts ship alongside the output.
+
+**The v2.0 experiment modules are deliberately *not* build outputs.** They are
+authored in `bruisekit/` but absent from `60_build_unified_bundle.py`'s copy
+list, and ship as standalone overlay zips instead. An experiment that may return
+nothing must not become a dependency of the file that produces Stages A–Y. Each
+zip builder *fails* if its module has been added to that copy list, because then
+the overlay would ship a stale duplicate with no rule about which wins.
+
+---
+
+## Install and test
+
+```bash
+cd BRUISE_UNIFIED
+pip install -r requirements.txt
+pip install -e .
+
+pytest                 # 12 checks, ~30 s, no GPU, no weights, no network
+```
+
+The test suite runs each module's own `self_test()`. Those assert the invariants
+the stages actually depend on — that `wrong_place` really is
+`zero_dice − empty_pred`, that a K=1 routed loss reduces to the Stage H gated
+loss exactly, that a probability threshold is converted to a logit and never read
+as one, that `find_sam_blocks` raises rather than returning empty. One further
+test fails if a module grows a `self_test()` that the runner never calls.
 
 ---
 
