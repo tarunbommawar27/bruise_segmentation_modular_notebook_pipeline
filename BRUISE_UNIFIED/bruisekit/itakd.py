@@ -635,6 +635,17 @@ def register_specs() -> list[str]:
 
     added = MT.register_specs()                 # B5 + the Stage M students
 
+    # Teach multiteacher's CONTROL_FOR about Stage O's arms. `control_batch` is
+    # multiteacher's helper and resolves the control by looking THAT dict up, so
+    # a Stage O family it has never heard of raises KeyError -- which is exactly
+    # what happened on the first ORC run, inside train_arms, after the preflight
+    # had already passed. Registered here rather than duplicating control_batch,
+    # because that function carries the accumulation arithmetic that keeps the
+    # arm's EFFECTIVE batch identical to its control's, and a second copy of that
+    # is a second thing to get wrong.
+    for family, control in CONTROL_FOR.items():
+        MT.CONTROL_FOR.setdefault(family, control)
+
     for family, arch in STUDENT_ARCH.items():
         if family not in L.FAMILY_SPEC:
             L.FAMILY_SPEC[family] = {
@@ -1697,8 +1708,22 @@ def preflight(env, reg, cfg: dict, man640: dict, weights: np.ndarray,
                 f"the weights for this pool.")
 
         model = _bm(spec["arch"], spec["size"], env.paths_for_models()).to(env.device)
-        crit = _be.DistillLoss(cfg.get("segformer_alpha", 0.6),
-                               cfg.get("aux_weight", 0.4))
+
+        # Build the criterion EXACTLY as engine.train_run will -- `cfg["alpha"]`,
+        # resolved from the per-arch key first. The earlier version read
+        # `segformer_alpha` directly and so passed while train_run raised
+        # `KeyError: 'alpha'` on the very next call. A preflight that takes a
+        # shortcut around the code it is checking is not checking it.
+        alpha_key = ("efficient_alpha" if STUDENT_ARCH.get(family) != "segformer"
+                     else "segformer_alpha")
+        if alpha_key not in cfg:
+            raise KeyError(
+                f"cfg has no {alpha_key!r}. engine.train_run reads cfg['alpha'] "
+                f"and train_arms resolves it from this key.")
+        run_cfg = {**cfg, "alpha": cfg[alpha_key]}
+        out["alpha"] = run_cfg["alpha"]
+        out["alpha_key"] = alpha_key
+        crit = _be.DistillLoss(run_cfg["alpha"], run_cfg["aux_weight"])
         if type(crit).__name__ != "GroupRoutedDistillLoss":
             raise RuntimeError(
                 f"engine.DistillLoss returned {type(crit).__name__}, not the "
@@ -1734,6 +1759,37 @@ def preflight(env, reg, cfg: dict, man640: dict, weights: np.ndarray,
         stats = crit.stats()
         out["images_per_group_seen"] = stats["images_per_group"]
 
+    # 5. The batch pin must resolve for every family train_arms will pin.
+    #
+    # THIS CHECK EXISTS BECAUSE THE PREFLIGHT MISSED IT ONCE. The first ORC run
+    # passed every check above and then died in train_arms on
+    # `MT.CONTROL_FOR[family]` -- a KeyError, twenty seconds in, because Stage O's
+    # controls live in itakd.CONTROL_FOR and `control_batch` reads multiteacher's.
+    # A preflight that exercises the loss but not the setup around it is only
+    # half a preflight, so this walks the same path train_arms will.
+    from . import multiteacher as MT
+    pins = {}
+    for fam in STAGE_O_FAMILIES:
+        if STUDENT_ARCH.get(fam) != "segformer":
+            continue                            # efficient arms use a fixed 16
+        try:
+            pins[fam] = MT.control_batch(env, reg, fam, seed, 16)
+        except KeyError as exc:
+            raise RuntimeError(
+                f"control_batch cannot resolve {fam}'s control: {exc}. "
+                f"register_specs() should have added it to "
+                f"multiteacher.CONTROL_FOR -- call itakd.register_specs() "
+                f"before training, or install the shims, which call it.") from exc
+        except FileNotFoundError as exc:
+            raise RuntimeError(
+                f"{fam}'s control has no config.json to read a batch size from: "
+                f"{exc}\n  Without the pin the arm differs from its control in "
+                f"batch size AND step count AND LR schedule, not just the teacher "
+                f"signal, and the contrast stops being one-variable. Fix the "
+                f"checkpoint path (EXTRA_RUNS) rather than skipping the pin."
+            ) from exc
+    out["batch_pins"] = {k: list(v) for k, v in pins.items()}
+
     if verbose:
         print("  PREFLIGHT")
         print(f"    loader tagged batch      groups {out['batch_groups']}")
@@ -1741,6 +1797,8 @@ def preflight(env, reg, cfg: dict, man640: dict, weights: np.ndarray,
               f"pool {out['pool']}")
         print(f"    temperatures             "
               f"{ {k: round(v, 4) for k, v in out['temperatures'].items()} }")
+        print(f"    alpha                    {out['alpha']} "
+              f"(from cfg[{out['alpha_key']!r}])")
         print(f"    loss                     {out['loss']:.6f}  "
               f"({out['params_with_finite_grad']} tensors with finite grad)")
         if len(set(out["batch_groups"])) > 1:
@@ -1750,6 +1808,9 @@ def preflight(env, reg, cfg: dict, man640: dict, weights: np.ndarray,
             print(f"    group index matters      not testable on this batch "
                   f"(all {out['batch_groups'][0]}); it is a 2-group scheme and "
                   f"this batch drew one group")
+        for fam, (micro, accum) in out["batch_pins"].items():
+            print(f"    batch pin {fam:<24} {micro} x {accum} "
+                  f"= {micro * accum} effective")
     return out
 
 
@@ -1774,6 +1835,14 @@ def train_arms(env, reg, cfg: dict, man640: dict, runs_dir,
     `runs_dir` is a Stage O directory, NOT `env.runs`: the reporting stages scan
     `env.runs` by name and an experiment must not be able to inject arms into a
     table it is not part of.
+
+    ALPHA IS SET PER ARM HERE, not taken from the caller's cfg. `engine.train_run`
+    reads `cfg["alpha"]`, and the notebooks' CFG carries `segformer_alpha` and
+    `efficient_alpha` separately -- the unified notebook resolves between them at
+    the call site and this does the same, keyed on `STUDENT_ARCH`. Relying on the
+    caller to have done it is how the shell runner and the notebook diverge, and
+    it is why the first ORC run raised `KeyError: 'alpha'` after the pool had
+    already loaded and the batch pin had already resolved.
     """
     from . import loaders as L
     from . import multiteacher as MT
@@ -1799,13 +1868,24 @@ def train_arms(env, reg, cfg: dict, man640: dict, runs_dir,
     done = []
     for family in families:
         spec = L.spec_for(family)
+        # The unified notebook's rule, applied here so a shell run and a notebook
+        # run cannot disagree about the KD mix.
+        alpha_key = ("efficient_alpha" if STUDENT_ARCH[family] != "segformer"
+                     else "segformer_alpha")
+        if alpha_key not in cfg:
+            raise KeyError(
+                f"cfg has no {alpha_key!r}; engine.train_run needs cfg['alpha'] "
+                f"and this is where it comes from. Use the CFG block from "
+                f"bruise_stage_o_train.ipynb §3.")
+        run_cfg = {**cfg, "alpha": cfg[alpha_key]}
+
         for seed in seeds:
             run_id = f"{family}__seed{seed}"
             if verbose:
-                print(f"\n{'=' * 74}\n{run_id}   control={CONTROL_FOR[family]}\n"
-                      f"{'=' * 74}")
+                print(f"\n{'=' * 74}\n{run_id}   control={CONTROL_FOR[family]}   "
+                      f"alpha={run_cfg['alpha']} ({alpha_key})\n{'=' * 74}")
             with arm(family):
-                res = train_run(run_id, spec, seed, cfg, env.paths_for_models(),
+                res = train_run(run_id, spec, seed, run_cfg, env.paths_for_models(),
                                 man640, env.cache640, runs_dir, env.device)
                 stats = dump_loss_stats(runs_dir / run_id)
             if verbose:
