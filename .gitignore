@@ -143,3 +143,63 @@ BRUISE_UNIFIED/*.pptx
 BRUISE_UNIFIED/*.pdf
 AAAI*.pdf
 *.pyc
+
+# ============================================================
+# 2026-08-12 — v2.0 push. Two additions, both load-bearing.
+# ============================================================
+
+# ---- PHI: clinical imagery that the rules above did NOT catch ----
+# FENWICK_LABELER_DATASET is 1.4 GB: 8,009 JPGs (caught by *.jpg) and
+# 11,482 PNGs (NOT caught by anything above -- there is no *.png rule,
+# because masks live beside code in some result folders). Named
+# explicitly rather than relying on a pattern, so a rename cannot
+# silently start publishing patient photographs.
+FENWICK_LABELER_DATASET/
+BRUISE_UNIFIED/FENWICK_LABELER_DATASET/
+
+# Labeler spreadsheets: subject-level records, contents unreviewed.
+*FENWICK_26_TOP_3_LABELLER*.xlsx
+*.xlsx
+
+# ---- Slide decks and everything that builds them ----
+# This repository is model training and analysis only. Decks are
+# presentation artefacts built FROM the result tables; the tables are
+# tracked, the decks are not.
+*.pptx
+_deck_figs/
+_todo_deck_figs/
+docs/figures_deck/
+BRUISE_UNIFIED/STORY_DECK/
+scripts/*_deck.py
+scripts/*_decks.py
+scripts/71_generate_b2_distillation_deck.py
+scripts/72_generate_simple_b2_deck.py
+scripts/73_generate_median_b2_deck.py
+scripts/74_generate_b2_decks.py
+scripts/75_generate_meeting_cheatsheet.py
+scripts/76_generate_stage_m_deck.py
+scripts/82_build_story_deck.py
+scripts/85_build_todo_deck.py
+scripts/51_generate_b5_distillation_deck.py
+docs/bruise_meeting_cheatsheet.tex
+docs/bruise_complete_story.tex
+
+# ---- Scratch ----
+BRUISE_UNIFIED/EXEC_STEPS.txt
+
+# ---- Re-admit the training/analysis generators the blanket
+# ---- `scripts/*` rule above would otherwise drop.
+# The trimmed-repo rule ignores all of scripts/ and negates three files.
+# Every generator added since then has to be negated explicitly or it is
+# silently absent from the push -- which is exactly what happened on the
+# first v2.0 dry run. Deck scripts are deliberately NOT re-admitted.
+!scripts/80_build_server_package.py
+!scripts/80_fenwick_cv_run.py
+!scripts/81_generate_all_models_notebook.py
+!scripts/81_generate_fenwick_cv_notebook.py
+!scripts/81b_zip_all_models.py
+!scripts/82_zip_fenwick_cv.py
+!scripts/83_generate_stage_o_notebook.py
+!scripts/83b_zip_stage_o.py
+!scripts/84_generate_inference_all_notebook.py
+!scripts/84b_zip_inference_all.py
