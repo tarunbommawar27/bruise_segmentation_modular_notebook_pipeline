@@ -25,6 +25,9 @@ it and how to *change* it.
 7g. [Stage P — lesion-size-stratified miss containment **(BUILT, NOT YET RUN ON ORC)**](#7g-stage-p--lesion-size-stratified-miss-containment)
 7h. [Stage N2 — the grid control, and *dermatology* pretraining **(RUN — gate CLOSED; §7f.8 superseded)**](#7h-stage-n2--the-grid-control-and-dermatology-pretraining)
 7i. [Stage N3 — the annotation ceiling on a third axis **(RUN 2026-08-10 — `dinov2_ft` 0.7902 test, 0 misses; does not separate from B2/B0; §7i.7)**](#7i-stage-n3--the-annotation-ceiling-on-a-third-axis)
+7j. [Stage N4 — mask vs caption pretraining **(RUN 2026-08-11 — `medsam − sam` = +0.0037, CI spans zero; but MedSAM is the best single teacher on VAL; §7j.3, §7j.4)**](#7j-stage-n4--mask-pretraining-vs-caption-pretraining-run-2026-08-11)
+7k. [Stage O — miss taxonomy, distilled-arm fairness, ITA-group routing **(RUN 2026-08-12 — two analyses delivered; the routing gate is CLOSED on both schemes; §7k.5)**](#7k-stage-o--the-miss-taxonomy-distilled-arm-fairness-and-ita-group-routing)
+7l. [The re-inference sweep — the pipeline verified against itself **(RUN 2026-08-12)**](#7l-the-re-inference-sweep--the-pipeline-verified-against-itself)
 8. [Stage D — analysis methodology](#8-stage-d--analysis-methodology)
 8b. [Stage G — final significance](#8b-stage-g--final-significance)
 9. [Code architecture](#9-code-architecture)
@@ -83,6 +86,37 @@ result** — it is inside the noise floor of the labels themselves.
 - Never claim model X beats model Y on a Dice difference smaller than ~0.05
   without a paired subject-level bootstrap showing the interval excludes zero.
 - Always show the annotation ceiling alongside a model ranking.
+- **Report complete misses in THREE columns, not one** — see below.
+
+### Complete miss is two failures, and §7k splits them
+
+`complete_miss_rate` is `dice == 0`, and that is the **union** of *the model
+predicted nothing* (`pred_positive_pixels == 0`) and *the model outlined the wrong
+region with zero overlap*. **They differ in 28 of 35 models.** Field-wide,
+excluding Fast-SCNN, 87 complete misses split **60 blank / 27 wrong-place** — so
+roughly one miss in three is a confident wrong answer, not a silence. A
+wrong-place error is the worse clinical failure: an empty mask shows nothing and
+invites a second look; a confident outline in the wrong location is an assertion.
+
+`itakd.miss_taxonomy` produces all three, per model, per ITA group and per size
+decile, with `wrong_place` **derived** as `zero_dice − empty_pred` so they cannot
+fail to add up. Lead with zero Dice — it is the union and therefore the
+conservative number — and quote the split beside it. Full treatment in §7k.1;
+this supersedes §7.2a's two-column framing without contradicting it.
+
+### And two numbers that change how every fairness table reads (§7k.2, §7k.3)
+
+**Lesion size is confounded with skin tone in this test set.** 59 % of
+Light (II-III) photographs contain a small bruise against 33 % of Dark (VI) —
+~1.8×. Part of every unconditioned "worse on light skin" figure is a size effect
+wearing a skin-tone label. Report the gap marginally *and* within the small
+stratum.
+
+**Small bruises are not uniformly harder, and capacity does not fix them.**
+`lraspp_mobilenetv3` (3.22 M) has the field's best smallest-decile recall at
+0.863, above `segformer_b5_teacher` (85 M) at 0.828. Recall is flat-to-noisy
+across size for most architectures; several are worst on the *largest* decile.
+YOLO is the exception and the reason it carries 12 misses.
 
 ---
 
@@ -3439,6 +3473,395 @@ applies to verdicts as much as to checkpoints.
 
 ---
 
+## 7j. Stage N4 — mask pretraining vs caption pretraining (RUN 2026-08-11)
+
+### 7j.1 The question the first three foundation stages could not answer
+
+Three medical encoders had lost to DINOv2 by the time this stage was written:
+
+| | contrast | |
+|---|---|---|
+| frozen probe (§7f.8) | `medsiglip − dinov2` | **−0.1660** |
+| frozen probe (§7h.7) | `dermlip − dinov2` | **−0.0913** |
+| fine-tuned (§7i.7) | `dermlip − dinov2` | **−0.0859** |
+
+Every one of those medical arms is CLIP/SigLIP-style: **one pooled vector per
+image against one sentence.** A caption describes a picture globally and never
+says which pixels are the lesion, so that objective is *rewarded* for discarding
+spatial detail. DINOv2's objective is patch-level. §7h.9 item 2 named this as the
+likeliest mechanism behind the whole ranking.
+
+If it is the mechanism, then *"medical pretraining does not help"* is the wrong
+conclusion from those three rows. The right one is narrower: **"medical *caption*
+pretraining does not help."** N, N2 and N3 all moved corpus and objective
+together and cannot separate them.
+
+### 7j.2 Design — the corpus isolated
+
+SAM and MedSAM are both pretrained with **dense mask supervision**, the objective
+this task actually wants. They differ in exactly one thing:
+
+| arm | corpus |
+|---|---|
+| `sam_ft` | SA-1B — 11 M natural images, ~1.1 B masks |
+| `medsam_ft` | ~1.5 M medical image–mask pairs, ~10 modalities |
+
+So `medsam − sam` holds objective, architecture (ViT-B/16), capacity and recipe
+fixed and moves **only the corpus**. Two arms, one seed, ~4–5 GPU-h.
+
+Both arms keep the image encoder only and discard the prompt encoder and mask
+decoder, because this pipeline is automatic and has no prompt to give. **"MedSAM
+with a ground-truth box" would answer a different question** — it hands the model
+the answer's location, which is the hard half of this task. Write it up as
+*MedSAM's features*, never *MedSAM*.
+
+Three things SAM does that no other encoder in this study does, all handled in
+`samprobe.py` and all capable of faking a result if mishandled: a 2-D `[1,64,64,C]`
+position embedding added to the patch grid (resampled 64→40 for 640 px), no
+CLS/register prefix to strip, and a `[B,C,H,W]` output rather than a token
+sequence. `_features` **checks** the layout rather than reshaping, because a
+tower returning tokens would otherwise be reshaped into a plausible-looking grid
+of garbage.
+
+### 7j.3 THE RESULT — the corpus buys nothing
+
+**Primary contrast, pre-registered:**
+
+```
+medsam_ft − sam_ft  =  +0.0037   CI95 [−0.0109, +0.0151]   contains zero
+```
+
+A 1.5 M-pair medical mask corpus buys **nothing** over natural images once the
+objective is held fixed. Fourth axis, same answer.
+
+| arm | val Dice | test mean | test median | test misses |
+|---|---|---|---|---|
+| `medsam_ft` | **0.7957** | 0.7672 | 0.8260 | **1** |
+| `sam_ft` | 0.7921 | 0.7551 | 0.8133 | 3 |
+
+Neither `medsam − dinov2` (+0.0133) nor `sam − dinov2` (+0.0096) clears zero
+either. The one contrast that does is exploratory: `medsam − dermlip` = **+0.0723**
+[+0.0325, +0.1061] — medical *masks* beat medical *captions* decisively, which is
+§7h.9 item 2 confirmed directly.
+
+### 7j.3a Two readings that must not be merged
+
+`medsam_ft` cleared **0.79 on validation**, which is §7i.3's pre-registered
+"ceiling not binding" trigger. That reading is **independent of the corpus
+verdict** and belongs in the write-up separately. It is also, on its own, not
+enough to break the ceiling: one seed, and the test median lands inside the same
+band as everything else.
+
+### 7j.4 The result that changed a recommendation
+
+On **test mean Dice** MedSAM (0.7672) sits below `segformer_b5_teacher` (0.7727)
+and `dinov2_ft` (0.7902), which reads as *"not a useful teacher."*
+
+On **validation** — the only split a teacher may be selected on — MedSAM is the
+**strongest single model in the project at 0.7957**, above `sam_ft` 0.7921,
+`segformer_b5_teacher` 0.7881, `deeplabv3plus_r50` 0.7838, `dinov2_ft` 0.7824 and
+`segformer_b2_teacher` 0.7717.
+
+It also has the field's **highest precision (0.873)**, the **best small-lesion
+row** (D1 mean Dice 0.792, recall 0.841 — above `dinov2_ft`), and the **smallest
+skin-tone gap of any candidate teacher (0.044** against DeepLabV3+'s 0.104).
+
+That reversal is why it entered Stage O's teacher pool. **Judging a teacher on
+test Dice and selecting one on val Dice give opposite answers here**, and only the
+second is admissible.
+
+### 7j.5 Where it lives
+
+`bruisekit/samprobe.py`, `bruise_stage_n4.ipynb`, `run_stage_n4.py`, generators
+`scripts/79*`. Results in `STAGE_N4_RESULTS/tables/`; the `runs/` tree stayed on
+the GPU box and is **empty in the laptop bundle** (§10.3). `load_pool_member` in
+`itakd.py` is the supported way to reuse the checkpoint as a teacher — it reads
+the cut from `test_summaries.json` and **never re-fits it**, because a re-fit
+would make Stage O's copy a different operating point from the one Stage N4
+reported.
+
+### 7j.6 What this does not license
+
+- Not *"MedSAM does not work."* We removed its prompt.
+- Not a seed-robust result. One seed.
+- Not a distribution-matched test. MedSAM's corpus is mostly radiology and
+  dermoscopy; ours is clinical photography across skin tones. That is the same
+  gap that put MedSigLIP last at 0.4670, and part of the loss here.
+- **MedSAM2 is untested.** It is a video model with a memory bank, not a version
+  bump — a different question needing its own stage.
+
+---
+
+## 7k. Stage O — the miss taxonomy, distilled-arm fairness, and ITA-group routing
+
+Three deliverables in one module because they share one set of per-image tables,
+and because the first two are what decide whether the third is worth GPU time.
+
+### 7k.1 "Complete miss" was hiding two different failures
+
+The study publishes one miss number, `complete_miss_rate`, and it is `dice == 0`.
+That is the **union** of two clinically different failures:
+
+| | definition | what it means |
+|---|---|---|
+| **empty prediction** | `pred_positive_pixels == 0` | the model found nothing; the clinician sees no outline and takes a second look |
+| **wrong place** | `dice == 0` and `pred > 0` | the model outlined a region with zero overlap — a confident assertion, and the worse failure |
+
+**They differ in 28 of the 35 models** in the current lineage. Field-wide,
+excluding Fast-SCNN: **87 complete misses = 60 blank + 27 wrong-place**, so
+roughly one miss in three is the model pointing somewhere wrong.
+
+Two rows make the case that one column was not enough:
+
+| arm | zero Dice | blank | wrong place |
+|---|---|---|---|
+| `p2_cwd_b5_to_b0` | 4 | 1 | **3** |
+| `ppmobileseg_tiny_b2kd` | 4 | **3** | 1 |
+
+Same total, mirror-image composition. And the best distillation arm in the study,
+`p3_adaptive` (0.7748), misses two photographs and **both are wrong-place** — it
+never returns a blank.
+
+`wrong_place` is **derived** as `zero_dice − empty_pred`, never counted
+separately, so the three columns cannot print numbers that fail to add up. An
+empty prediction always scores Dice 0, so `empty ≤ zero` is arithmetic;
+`_miss_counts` **raises** if a table violates it, because that means the Dice
+column and the pixel counts came from different evaluations and everything below
+is void.
+
+This **supersedes §7.2a's two-definition framing.** That section correctly
+identified that the per-seed table counts empty predictions while
+`report.normalize` counts `dice == 0`. It is still right; it is now the
+two-column version of a three-column answer. Publish all three, and lead with
+zero Dice because it is the union and therefore conservative.
+
+### 7k.2 Lesion size is confounded with skin tone, and by how much
+
+`fairness__size_by_ita.csv`, a property of the data and of no model:
+
+| ITA group | n | share in the small-lesion stratum |
+|---|---|---|
+| Light (II-III) | 39 | **0.59** |
+| Brown (V) | 29 | 0.41 |
+| Intermediate (III-IV) | 38 | 0.34 |
+| Tan (IV) | 24 | 0.33 |
+| Dark (VI) | 55 | 0.33 |
+
+Photographs of light skin are **~1.8× more likely to contain a small bruise.**
+Pooled across all 35 models, 105 of 115 zero-Dice events fall in deciles D1–D4.
+So a material part of every unconditioned *"worse on light skin"* number in this
+study is a **lesion-size effect wearing a skin-tone label** — which §8.4 warned
+about and nothing had quantified for the distillation arms.
+
+`lesionsize.fairness_conditioned` now reports each gap twice, marginally and
+within the small stratum, and labels each model HOLDS or SHRINKS.
+`topformer_tiny_distilled` is a clean SHRINKS (0.175 → 0.051);
+`fastscnn_distilled` HOLDS (0.182 → 0.260).
+
+### 7k.2a The gap the previous fairness export left
+
+`FINAL_RESULT/RESULT_AUGUST_08/fairness_stats.csv` covers **24 models and
+excludes every Stage C distillation arm** — including `p3_adaptive`, the study's
+best. The export was built from unprefixed filenames and those arms are written
+`per_image_distill_*`. So the one question the deck is asked about the best
+distilled model had no table behind it. `STAGE_O_RESULTS/` closes that with
+seven tables over 35 models.
+
+### 7k.3 Small-lesion recall — and the result nobody predicted
+
+Recall, not Dice: on a bruise covering ~1 % of the frame the clinical question is
+whether the model found it, and a few boundary pixels move Dice far more than
+they move recall on a target that small.
+
+| model | all 185 | smallest decile (D1) |
+|---|---|---|
+| **`lraspp_mobilenetv3` (3.22 M)** | 0.765 | **0.863** |
+| `segformer_b5_teacher` (85 M) | 0.716 | 0.828 |
+| `segformer_b2_teacher` | 0.728 | 0.822 |
+| `p3_adaptive` | 0.742 | 0.797 |
+| `unet_r50` | 0.746 | 0.664 |
+| `yolo_sem_direct` | 0.671 | **0.474** |
+
+**A 3.22 M mobile model beats an 85 M teacher on the bruises that are hardest to
+see.** Capacity is not what small lesions need — which is §7b.7's post-hoc
+observation, now confirmed on the full field.
+
+And the assumption behind the whole size stratification is **mostly false**:
+recall does not fall off with size for most architectures. Several are worst on
+the **largest** decile. YOLO is the exception — 0.47 at D1 rising to 0.82 at D8 —
+and that single decile is where its 12 complete misses come from.
+
+### 7k.4 ITA-group-routed distillation — built, gated SHUT
+
+Stage M routed per **image** on each teacher's soft Dice against the label, and
+is explicit that it does not route by skin tone (§7e.6). Stage O routes per **ITA
+group** on weights fitted once on validation:
+
+```
+w_g = softmax(beta * mean_val_dice_k_within_group_g)
+```
+
+Three consequences, each answering an objection Stage M invites:
+
+1. **No label at routing time.** The weights come from validation before training
+   starts; the only per-image input is its ITA group, a manifest column. Unlike
+   Stage M's router, this one is not restricted to training.
+2. **K weights per group, not per image.** Five ITA groups over 20 validation
+   subjects cannot support 5×K free parameters. `SCHEME` defaults to
+   `light_vs_rest`, a two-group collapse.
+3. **An identifiability clause the earlier gates lacked** — §7k.5.
+
+**Pool: `segformer_b5_teacher`, `deeplabv3plus_r50`, `medsam_ft`.**
+`segformer_b2_teacher` is dropped — it wins no group on validation, has the
+lowest drop-one marginal in Stage M's own gate (0.0121 vs DeepLabV3+'s 0.0224),
+and is the same MiT family as B5, so it is simultaneously the least useful and
+the most correlated member. `unet_r50` is dropped because it appears as a
+per-group winner only in the **test** table quoted in `multiteacher.py`'s
+docstring and was never in Stage M's actual pool; selecting a per-group teacher
+on test is leakage.
+
+`Very Light (I-II)` maps into the Light group **on purpose**: it is 12 train
+images and **0 validation images**, so under the five-group scheme those 12 would
+have no fitted weight at all. `group_weights` **raises** on a group with no
+validation images rather than falling back to uniform — a uniform fallback is
+Stage C's `p2_ensemble_uniform` wearing this stage's name.
+
+### 7k.5 THE GATE — closed on both schemes, and the reason is the finding
+
+```
+open iff  weighting-gain CI clears zero
+     AND  projected student gain > 0.01 Dice
+     AND  >=1 group's argmax is identifiable at p >= 0.75
+```
+
+The third clause is new and load-bearing. Stage C's gate opened on +0.0258 of
+oracle gain and its arm delivered +0.0068; Stage M's opened on +0.0482 and
+returned six inconclusive contrasts. **Both were measuring headroom that
+genuinely existed. Neither asked whether the routing KEY was estimable.**
+
+| clause | `light_vs_rest` | `five` |
+|---|---|---|
+| weighting gain over best single | **−0.0056** [−0.0174, −0.0016] | −0.0050 [−0.0166, −0.0012] |
+| projected student gain vs +0.01 | −0.0015 ✗ | −0.0013 ✗ |
+| routing key identifiable | **0 of 2** ✗ | 1 of 5 ✗ |
+| pool contains misses best single lacks | 2 vs 2 ✗ | 2 vs 2 ✗ |
+
+**Identifiability, five-group scheme** — how often the group's argmax teacher
+survives resampling the 20 validation subjects:
+
+| group | n patients | best | margin | P(stable) |
+|---|---|---|---|---|
+| Tan (IV) | 11 | B5 | +0.0134 | **0.84** |
+| Dark (VI) | 8 | B5 | +0.0082 | 0.72 |
+| Light (II-III) | 7 | MedSAM | +0.0153 | 0.69 |
+| Brown (V) | 4 | B5 | +0.0128 | 0.63 |
+| Intermediate (III-IV) | 12 | DeepLabV3+ | +0.0038 | **0.40** |
+
+Four of five groups are coin flips. **An arm routed on that argmax is fitting
+sampling noise**, and would have produced a fourth null indistinguishable from
+the first three.
+
+### 7k.5a The blend loses on fairness too, which was the fallback justification
+
+| | overall val Dice | best−worst skin-tone gap |
+|---|---|---|
+| `medsam_ft` alone | **0.7957** | **0.044** |
+| `segformer_b5_teacher` | 0.7881 | 0.087 |
+| `deeplabv3plus_r50` | 0.7838 | 0.104 |
+| group-weighted blend | 0.7901 | 0.061 |
+
+The blend is fairer than the two weak members and **worse than the best single
+teacher on both axes at once** — −0.006 Dice *and* +0.018 gap. There is no trade
+to make. A weighted average is pulled toward the middle: it rescues you from the
+worst member and prevents you reaching the best.
+
+Honest limit: subject-clustered bootstrap on those gap differences gives
+`blend − medsam` = +0.018 [−0.026, +0.047]. **No gap difference here is
+significant** at 20 subjects. The strict reading is "no detectable fairness
+difference", which still does not rescue the blend — it would have to *win* on
+fairness to justify losing on Dice, and it does not lead even on the point
+estimate.
+
+### 7k.6 What the closed gate licenses
+
+**The per-image oracle gain is +0.0450.** Picking the best teacher per
+*photograph* is worth real Dice — the teachers do complement each other.
+**Grouping those photographs by skin tone captures none of it.** So whatever
+makes one teacher better on a given image, it is not the patient's skin tone.
+
+That is the measured answer to *"why not just group by skin tone"* — a question
+Stage C's `p3_adaptive_group` (0.7586, 11th of 15 arms) and Stage M (§7e.6) each
+settled by **assertion**. It is a result about the study design, and it is
+stronger than the arm would have been.
+
+**The practical lever is teacher CHOICE, not teacher blending.** 0.044 against
+0.104 is a bigger fairness move than any blend produced, and it costs nothing.
+
+### 7k.7 Where it lives, and the failure that would fake a result
+
+`bruisekit/itakd.py`, `bruise_stage_o.ipynb`, `run_stage_o.py`, generators
+`scripts/83*`. Results in `STAGE_O_RESULTS/tables/` — including the gate as
+plain text as well as JSON, because a closed gate is a result and someone has to
+read it without a script.
+
+**`engine.train_run` iterates `for step, (x, y, _)` and discards the stem**, so
+the loss has no idea which images it is looking at. Rather than edit the shared
+training loop, `install_group_shim` wraps the *training* loader so each batch
+records its stems' group indices in a module global immediately before the batch
+is yielded. Loader, teacher forward and loss all run synchronously in the main
+process within one iteration, so the global is always the current batch's.
+
+That coupling is **guarded, not trusted**: `GroupRoutedDistillLoss.forward`
+raises if the group vector is absent or its length does not match the batch.
+Without that check a stale global would silently mean uniform weights, the arm
+would quietly become `p2_ensemble_uniform` with a gate, and it would report an
+entirely plausible number for a different experiment. `self_test` asserts both
+raises, plus the two identities that keep the contrast one-variable: K=1 reduces
+to Stage H's gated loss exactly, and a uniform weight matrix reproduces Stage C's
+uniform ensemble.
+
+**Read `group_loss_stats.json`'s `images_per_group` before any Dice number.** An
+arm whose loss never saw one of the groups did not run the experiment the gate
+authorised.
+
+---
+
+## 7l. The re-inference sweep — the pipeline verified against itself
+
+Run 2026-08-12 on ORC. 24 models re-scored from their checkpoints through
+`inference.run`, each at its own val-fitted cut, and compared against the table
+its original run wrote.
+
+| | |
+|---|---|
+| bit-for-bit identical | **6 of 12** with a shipped table |
+| largest disagreement on any single photograph | **0.0068** |
+| complete-miss count changed | 1 model, by 1 (`yolo_sem_distilled`) |
+
+The handbook's standing claim — that every reporting model agrees to better than
+2e-4 mean Dice against the original A100 run — is now **checked rather than
+repeated**. Results in `inference/inference_reconciliation.csv`.
+
+**The caveat that limits what this proves.** `inference.resolve_runs` reads best
+seeds from `report.best_seeds`, which covers **five families**; every other
+family falls back to **seed 0**. So 19 of the 24 rows are a different seed from
+the published lineage, and their per-image scores differ by up to **0.81 Dice** —
+which is the documented signature of a seed mismatch (§7l is the third time this
+trap has been recorded), not of a broken pipeline. **This sweep confirms the
+pipeline, not those specific published rows.** A full reconciliation needs
+`best_seeds` extended to every family.
+
+**No second inference implementation exists, deliberately.** A ~600-line module
+with its own loader, cut resolution and reconcile was written during this work
+and **deleted**: `inference.inference_pass`'s docstring says *"There is
+deliberately no second inference implementation in this file,"* and a
+re-inference whose only job is to confirm published numbers must not be computed
+by a different path than produced them. `scripts/84b` enforces it — the build
+fails if the notebook it packages contains `def score_`, `evaluate_at_cut(` or
+`load_state_dict(`.
+
+---
+
 ## 8. Stage D — analysis methodology
 
 Everything in Stage D is a function of **per-image Dice**, not of model weights.
@@ -4079,6 +4502,19 @@ Add `"MYTABLE"` to the `WANTED` list and `FILENAME` map in the D10 save cell.
 
 ### Genuine gaps
 
+0. **`report.best_seeds` covers five families, not all of them.** It returns the
+   val-selected best seed for the three SegFormers and both YOLO arms; every
+   other family falls back to **seed 0** in `inference.resolve_runs`. That is why
+   §7l's re-inference sweep confirms the pipeline but not the published rows for
+   the mobile family and the baselines — 19 of its 24 rows are a different seed
+   from the reported lineage, differing by up to 0.81 Dice per image. Extending
+   `best_seeds` to every family is the fix and is a table lookup, not a rerun.
+0b. **MedSAM2 untested** (§7j.6). A video model with a memory bank, not a
+   version bump; it needs its own stage rather than a swap into Stage N4.
+0c. **The ITA-grouped multi-teacher arm is built and never trained** (§7k.4).
+   Deliberate — its gate is closed on both schemes and the closure is the
+   result. `run_stage_o.py --only train` refuses without `--force-train`. Do not
+   run it without writing down why.
 1. **nnU-Net** — never run on the canonical 697/134 split. No weights, no
    results. Needs `nnunetv2` and ~8 GPU-hours.
 2. **`x_dkd_b5_to_b0`** — a KD arm configured but never executed; the directory
@@ -4666,7 +5102,50 @@ BRUISE_UNIFIED/
 │   ├── lesionsize.py             Stage P — NOT A BUILD OUTPUT (§7g), same reason.
 │   │                             Global decile cut, stratum cluster bootstrap,
 │   │                             min-detectable-effect. Pure pandas, no torch.
+│   ├── dermprobe.py              Stage N2 — _ProbeBase, the architecture-blind
+│   │                             arm contract every later probe subclasses (§7h)
+│   ├── finetune_n3.py            Stage N3 — unfrozen probe + ConvDecodeHead,
+│   │                             which N4 and O import so the head is the SAME
+│   │                             object across stages (§7i)
+│   ├── samprobe.py               Stage N4 — SAM/MedSAM encoders retargeted
+│   │                             1024/64 → 640/40. resample_pos_embed_2d,
+│   │                             find_sam_blocks, mask_supervision_gate (§7j)
+│   ├── itakd.py                  Stage O — miss_taxonomy, distilled_fairness,
+│   │                             ita_group_gate + identifiability, the group
+│   │                             shim and GroupRoutedDistillLoss (§7k)
+│   ├── allmodels.py              cross-root discovery + cohorting. The module
+│   │                             that makes an analysis runnable on BOTH hosts
+│   │                             (§10.3); merges across roots, quarantines
+│   │                             tables that cannot share a decile cut
+│   ├── fenwick_cv.py             matched-core labeler cross-validation — the
+│   │                             only data with >1 annotation per image, so the
+│   │                             only direct measurement of the ceiling (§1)
 │   └── gpustate.py               clocks, persistence, SM clock under load (§7.3a)
+│
+├── bruise_stage_n3.ipynb         Stage N3 (§7i)      + run_stage_n4.py
+├── bruise_stage_n4.ipynb         Stage N4 (§7j)      + run_stage_o.py
+├── bruise_stage_o.ipynb          Stage O  (§7k)      + run_all_models.py
+├── bruise_all_models.ipynb       every model, every endpoint, cohorted
+├── bruise_derm_probe.ipynb       Stage N2 (§7h)
+├── bruise_fenwick_cv.ipynb       labeler CV
+├── bruise_inference_all.ipynb    §7l. Calls bruisekit.inference and adds NO
+│                                 scoring code; scripts/84b fails the build if
+│                                 it ever does.
+├── pyproject.toml                pip install -e .  (v2.0)
+├── tests/                        pytest over every module's self_test() — 12
+│                                 checks, no GPU, no weights, no network
+│
+├── STAGE_N3_RESULTS/             §7i. NOTE: ceiling_gate.json from that run is
+│                                 VOID — see §7i.7a.
+├── STAGE_N4_RESULTS/tables/      §7j. runs/ is EMPTY on the laptop (§10.3).
+├── STAGE_O_RESULTS/tables/       §7k. ita_group_gate__*.txt is the verdict in
+│                                 plain text as well as JSON.
+├── ALL_MODELS_RESULTS/           the one-row-per-model table, with cohort flags
+├── FENWICK_RESULTS/tables/       labeler CV; cross_dice is the ranking column
+└── inference/                    §7l re-inference + the fp32 speed sweep.
+                                  Speed CSVs are named for device AND precision
+                                  AND machine — three earlier benchmarks all
+                                  wrote to one filename (§7.3a).
 │
 ├── data/                         1016 native-res images + masks (2.6 GB)
 │   ├── train/{images,masks}      831  (697 train + 134 val)
