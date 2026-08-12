@@ -101,6 +101,25 @@ through the real shims catches all three in about a minute.
 **§8 runs the contrasts the gate tried to predict**, including against Stage M's
 per-image router, which is the comparison that says whether grouping by skin tone
 is better or worse than routing per image.
+
+## This is a one-seed screen, and that changes what it can conclude
+
+`SEEDS = (0,)` — 4.4 GPU-hours instead of 13. That is the right call for a first
+look, but the asymmetry matters and is worth stating before any number exists:
+
+| outcome | what one seed licenses |
+|---|---|
+| **A win** | Worth taking seriously as a *signal*. Confirm with seeds 1–2 before claiming anything — that is +9 GPU-h and it is what turns a screen into a result. |
+| **A null** | **Weak evidence.** One seed cannot separate "the method does nothing" from "this draw was unlucky", and this project has seen a seed collapse outright (Stage Y, seed 2). |
+
+The project's measured seed-to-seed spread is **±0.004 Dice** on B2 across three
+seeds, so **any |Δ| below roughly 0.008 is uninterpretable from one run.** §8
+prints that floor next to the observed delta rather than leaving you to remember
+it.
+
+The saving grace: the gate already predicts a null. A one-seed screen that
+*agrees* with a negative pre-test is cheap corroboration, and a one-seed screen
+that *contradicts* it is exactly the surprise worth spending nine more hours on.
 """)
 
 code('''
@@ -137,7 +156,14 @@ N4_RESULTS = None      # None = <bundle>/STAGE_N4_RESULTS  (medsam_ft lives here
 
 SCHEME     = "light_vs_rest"          # the pre-registered two-group collapse
 FAMILIES   = ("segformer_b0_itakd", "lraspp_mobilenetv3_itakd")
-SEEDS      = (0, 1, 2)                # three, or the contrast has no variance
+
+# ONE SEED -- this is a SCREEN, not a confirmatory run. ~4.4 GPU-h instead of 13.
+# Read the "what one seed buys" cell below before interpreting anything: a single
+# seed cannot separate a null from an unlucky draw, and Stage Y seed 2 collapsed
+# outright in this project. The decision rule for spending seeds 1 and 2 is in
+# section 8.
+SEEDS      = (0,)
+
 EPOCHS     = 100                      # cap; the engine early-stops on patience
 MAX_MICRO  = 16                       # accumulation restores the control's
                                       # EFFECTIVE batch exactly
@@ -434,24 +460,63 @@ for fam in FAMILIES:
             })
 CONTRASTS = pd.DataFrame(rows)
 print(CONTRASTS.to_string(index=False) if len(CONTRASTS) else "nothing to compare yet")
+
+# The interpretability floor, printed BESIDE the delta rather than left to memory.
+# 0.004 is this project's measured seed-to-seed sd on B2 across three seeds; two
+# single-seed runs differ by roughly sqrt(2) x that before the method does
+# anything at all.
+SEED_SD    = 0.004
+NOISE_1SEED = round(SEED_SD * (2 ** 0.5), 4)
+
 if len(CONTRASTS):
     itakd.save(env, "forced_contrasts", CONTRASTS, subdir="trained")
-    print(f"\\nGate projected a student gain of "
-          f"{GATE['projected_student_gain']:+.4f}.")
-    print(f"Observed mean delta vs control: "
-          f"{CONTRASTS[CONTRASTS.kind == 'vs control'].delta_mean_dice.mean():+.4f}")
+    vc = CONTRASTS[CONTRASTS.kind == "vs control"]
+    obs = float(vc.delta_mean_dice.mean())
+    print(f"\\n{'=' * 74}")
+    print(f"  gate PROJECTED a student gain of   {GATE['projected_student_gain']:+.4f}")
+    print(f"  OBSERVED mean delta vs control     {obs:+.4f}")
+    print(f"  one-seed noise floor (+-)          {NOISE_1SEED:.4f}   "
+          f"[seed sd {SEED_SD} x sqrt(2)]")
+    print(f"  annotation-ceiling floor (§1)      0.0500")
+    print(f"{'=' * 74}")
+    if len(SEEDS) == 1:
+        if abs(obs) < NOISE_1SEED:
+            print("  READING: inside the one-seed noise floor. This is consistent")
+            print("  with the gate's projection and with the method doing nothing,")
+            print("  and ONE SEED CANNOT TELL THOSE APART. Report as a screen that")
+            print("  did not contradict the pre-test -- not as a measured null.")
+        elif obs > 0:
+            print("  READING: above the one-seed noise floor and POSITIVE. This is")
+            print("  the surprise worth paying for. Run seeds 1 and 2 (+9 GPU-h)")
+            print("  before claiming anything; a single-seed win is a signal, not")
+            print("  a result. Note it is still inside §1's 0.05 ceiling floor.")
+        else:
+            print("  READING: below the floor and NEGATIVE -- the arm looks worse,")
+            print("  not merely useless. Check images_per_group in §6 first: an arm")
+            print("  whose loss never saw one group did not run this experiment.")
+    print("\\n  Miss counts are the endpoint this study is judged on. A Dice tie")
+    print("  with a miss-rate difference is a result; read the two miss columns")
+    print("  above before the Dice columns.")
 ''')
 
 # ── §9 ───────────────────────────────────────────────────────────────────────
 md("""
 ## §9 — How to report whatever this produced
 
-**If it is a null** — the expected outcome — you now have it *measured* rather
-than projected, which is the stronger form. Report it as the fourth consecutive
-KD null in this project (Stage C `p3_adaptive_group` at 0.7586, Stage H, Stage M),
-and say that the gate predicted it: a pre-test that correctly forecast a null it
-was then allowed to be checked against is a working pre-test, and that is worth a
-sentence of its own.
+**With one seed, say "screen", not "null".** A single seed cannot separate *the
+method does nothing* from *this draw was unlucky*, and this project has seen a
+seed collapse outright (Stage Y, seed 2). The honest phrasing for a
+below-the-floor result is: *"a one-seed screen did not contradict the gate's
+projection"* — which is real corroboration and cheap, but is not the measured
+null that three seeds would give you. Do not write "we ran it and it did nothing"
+off one run; that sentence needs seeds 1 and 2 behind it.
+
+**If it is a null at three seeds** — the expected outcome — you have it *measured*
+rather than projected, which is the stronger form. Report it as the fourth
+consecutive KD null in this project (Stage C `p3_adaptive_group` at 0.7586, Stage
+H, Stage M), and say that the gate predicted it: a pre-test that correctly
+forecast a null it was then allowed to be checked against is a working pre-test,
+and that is worth a sentence of its own.
 
 **If the arm wins**, the interesting object is the *gate*, not the arm. Check in
 this order before believing it: (1) `images_per_group` in §6 — did the loss see
