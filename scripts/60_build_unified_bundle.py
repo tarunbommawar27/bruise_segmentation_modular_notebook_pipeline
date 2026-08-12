@@ -128,7 +128,13 @@ def copy_authored_modules() -> None:
              "reliability_kd.py",
              # inference (handbook 18.1: the test-set pass and the 640 speed
              # table, over the registry rather than over a hard-coded model list).
-             "inference.py"]
+             "inference.py",
+             # gpustate (handbook 18.5 item 1: persistence mode, applications vs
+             # max clock, and the SM clock sampled UNDER LOAD. Three speed tables
+             # were published without any of it, which is why a MIG slice looked
+             # 3.3x faster than a full A100 and nobody could say whether that was
+             # the hardware or the clock governor).
+             "gpustate.py"]
     for n in names:
         s = src / n
         if not s.exists():

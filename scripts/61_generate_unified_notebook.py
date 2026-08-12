@@ -92,8 +92,36 @@ BUNDLE_ROOT = None
 WORK_DIR    = None      # scratch for the 640 cache and any new runs. None = sensible default.
 DEVICE      = None      # None = auto (cuda -> mps -> cpu). "cpu" forces cached-results mode.
 
+# ── extra places to LOOK for checkpoints ─────────────────────────────────────
+# The study's weights are not in one directory and never were. `env.run_roots`
+# searches, in this order:
+#
+#   1. WORK_DIR/runs                        anything this session trains
+#   2. EXTRA_RUNS                           <- you set this
+#   3. <bundle>/checkpoints/final           Stage A, 5 models x 3 seeds
+#   4. <bundle>/checkpoints/baselines       U-Net, DeepLabV3+
+#   5. <bundle>/checkpoints/efficient       Stage E/F mobile arms
+#   6. <bundle>/checkpoints/rgkd            Stage H arms
+#   7. <bundle>/checkpoints/yolo_l          Stage Y
+#   8. <bundle>/checkpoints/distill/teachers  B2, B5, B0-distilled
+#
+# First hit wins, so your own training always beats a shipped copy, and every
+# Run records WHICH root answered (`source_root`) and in which on-disk layout
+# (`layout`). Before this, only 1 and one of 3-8 were searched, the fallback
+# between them was silent, and on 2026-08-04 that loaded old-lineage SegFormer
+# checkpoints because the real runs sat in a scratch dir nobody had named.
+#
+# Point it at the machine's scratch tree. A single string or a list both work:
+#   EXTRA_RUNS = "/scratch/tbommawa/bruise_work/runs"
+#   EXTRA_RUNS = ["/scratch/tbommawa/bruise_work/runs", "/content/bruise_work/runs"]
+EXTRA_RUNS = None
+
 # ── what this session is allowed to do ───────────────────────────────────────
-RUN_STAGES  = "ABCDEH"  # any subset, e.g. "ED" for just the mobile baselines + analysis
+# Any subset, e.g. "ED" for just the mobile baselines + analysis.
+# "Y" adds YOLO26-large (Stage Y) and is OFF by default: it is the most expensive
+# single arm in the study (~3.5 h) and needs a pretrained file the bundle does not
+# ship. Add it deliberately -- "ABCDEHY" -- not by leaving it on.
+RUN_STAGES  = "ABCDEH"
 
 # False: a run with no checkpoint AND no cached result is reported as a gap and
 #        skipped. True: it is trained. Left False so that an accidental Run All
@@ -154,6 +182,33 @@ RUN_INFERENCE_BLOCK = False
 #                       "topformer_tiny", "ppmobileseg_tiny"]
 # A family with no checkpoint on this host prints SKIP and is left out.
 INFERENCE_MODELS = None
+
+# "fp32" is the published recipe and the only publishable setting: `benchmark_speed`
+# contains no autocast, so every shipped row is full precision. "fp16" runs the
+# mirrored autocast path, which exists to ATTRIBUTE a gap, not to report one --
+# measured on two machines across 21 model-pairs, autocast made every model except
+# the two big ResNets SLOWER at batch 1 (1.27-1.44x), because it adds cast kernels
+# to a benchmark that is already dispatch-bound. A table may not mix the two;
+# check_single_machine raises.
+INFERENCE_PRECISION = "fp32"
+
+# Short name for this host, e.g. "orc-mig", "colab-a100". Goes into the output
+# filename so two machines' tables cannot collide or be mistaken for one another.
+# None = device-tagged only, which was how three incomparable tables came to share
+# a filename and have to be told apart from memory.
+MACHINE_TAG = None
+
+# ── Stage Y · YOLO26-large ───────────────────────────────────────────────────
+# Which seeds Stage Y should have. ONE by default, unlike every other stage.
+# A yolo26l run is ~3.5 h against a mobile arm's ~0.5 h, so the three-seed habit
+# that costs 1.5 GPU-hours in Stage E costs 21 here. One seed answers the question
+# the stage is asked -- "does capacity fix yolo26n's 6.5% complete-miss rate?" --
+# and three are worth buying only once that answer is yes.
+#
+# Needs `pretrained_weights/yolo26l-sem.pt`, which most bundles do not ship (~50 MB).
+# §2 reports it as a WARN rather than a preflight failure: a session that is not
+# running Stage Y should not be blocked by a file it will never open.
+YOLO_L_SEEDS = (0,)
 
 # ── recipe (identical to the recipe the shipped checkpoints were trained with) ─
 CFG = dict(
@@ -366,8 +421,19 @@ from bruisekit.registry import Registry, WEIGHTS, RESULTS, MISSING, summarize_ga
 from bruisekit import loaders as L
 from bruisekit import report as R
 
-env = setup(root=BUNDLE_ROOT, work=WORK_DIR, device=DEVICE)
+env = setup(root=BUNDLE_ROOT, work=WORK_DIR, device=DEVICE, extra_runs=EXTRA_RUNS)
 print(env.describe())
+
+# Print the search path, marking which roots actually exist. This is the line
+# that would have caught the 2026-08-04 wrong-checkpoint substitution in ten
+# seconds instead of two wasted ORC runs: if the root holding your training is
+# not on this list, nothing below is reading it.
+print("\ncheckpoint search path (first hit wins):")
+for _i, _r in enumerate(env.run_roots, 1):
+    _n = len(list(_r.iterdir())) if _r.is_dir() else 0
+    print(f"  {_i}. {'OK ' if _r.is_dir() else '-- '} {_n:>3} entries  {_r}")
+if not any(r.is_dir() and any(r.iterdir()) for r in env.run_roots):
+    print("  WARNING  every search root is empty or absent -- nothing can load.")
 
 if str(env.device) == "cpu" and (ALLOW_TRAINING or RECOMPUTE_FROM_WEIGHTS):
     warnings.warn("No GPU: training is impractical and re-inference will be slow. "
@@ -414,6 +480,21 @@ for w in ("segformer_mit_b0", "segformer_mit_b2", "yolo26n-sem.pt"):
     e = (env.weights / w).exists(); ok &= e
     print(f"{'PASS' if e else 'FAIL'}  pretrained: {w}")
 
+# Stage Y's backbone is a WARN, not a FAIL. It is a ~50 MB file that only a
+# Stage Y session opens, and blocking every other session on it would make the
+# preflight lie about what this run actually needs.
+_yl = env.weights / "yolo26l-sem.pt"
+if _yl.exists():
+    print(f"PASS  pretrained: {_yl.name} (Stage Y available)")
+elif "Y" in RUN_STAGES:
+    ok = False
+    print(f"FAIL  pretrained: {_yl.name} MISSING and 'Y' is in RUN_STAGES\n"
+          f"      from ultralytics import YOLO; YOLO('yolo26l-sem.pt')  "
+          f"-> move it to {env.weights}")
+else:
+    print(f"WARN  pretrained: {_yl.name} absent -- Stage Y unavailable "
+          f"(not requested, so not a failure)")
+
 print("\n" + ("PREFLIGHT OK" if ok else "PREFLIGHT FAILED -- do not trust anything below"))
 assert ok, "preflight failed"
 ''')
@@ -437,8 +518,44 @@ neighbouring seed and never quietly averaged away.
 
 code(r'''
 reg = Registry(env, allow_training=ALLOW_TRAINING, force=FORCE_RETRAIN,
-               efficient_seeds=EFFICIENT_SEEDS, rgkd_seeds=RGKD_SEEDS).scan()
+               efficient_seeds=EFFICIENT_SEEDS, rgkd_seeds=RGKD_SEEDS,
+               yolo_l_seeds=YOLO_L_SEEDS).scan()
 plan = reg.report()
+''')
+
+code(r'''
+# WHERE DID EACH CHECKPOINT COME FROM?
+#
+# The plan above says WHAT resolved. This says FROM WHERE -- the question that
+# went unanswered for two ORC runs because the registry searched two directories
+# and fell back between them without a word. Read the `root` column: if a family
+# you trained yourself shows a shipped root, your training is not being used.
+from bruisekit.registry import WEIGHTS as _W
+
+_prov = pd.DataFrame([
+    {"run_id": r.run_id, "stage": r.stage, "family": r.family, "kind": r.kind,
+     "layout": r.layout, "root": r.source_root.name if r.source_root else "-",
+     "threshold": r.threshold_file.name if r.threshold_file else "-"}
+    for r in reg.runs.values() if r.tier == _W
+])
+if len(_prov):
+    print(f"{len(_prov)} usable checkpoints, by source:")
+    print(_prov.groupby(["root", "layout", "stage"]).size().to_string())
+    display(_prov.sort_values(["stage", "run_id"]).reset_index(drop=True))
+else:
+    print("no WEIGHTS-tier runs found in any search root -- check EXTRA_RUNS in §0")
+
+# The teachers, called out separately because the fairness work turns on which
+# one you distil from. B2 is the ONLY model in this study with a statistically
+# detectable skin-tone disparity (Kruskal p=0.011, gap 0.112); B5 has gap 0.070
+# at p=0.220 and beats B2 on every ITA group -- +0.057 on Tan (IV), +0.027 on
+# Dark (VI). Every Stage H arm currently distils from B2.
+_t = [r for r in reg.runs.values() if r.stage == "T"]
+if _t:
+    print("\nteacher store:")
+    for r in sorted(_t, key=lambda x: x.family):
+        print(f"  {r.family:<26} {r.tier:<8} "
+              f"{'cut available' if r.threshold_file else 'no threshold (fine for KD)'}")
 ''')
 
 code(r'''
@@ -598,7 +715,14 @@ def train_missing(stage, reg, cfg):
                                           imgsz=cfg["img_size"])
                     (rd / "DATASET_DONE.json").write_text("{}")
                 yn.write_data_yaml(data_dir, rd)
-                yn.train_native(env.paths_for_models()["yolo"], rd / "data.yaml", rd, cfg, r.seed)
+                # Size-aware, via the family name. Passing the nano weights to a
+                # Stage Y run is SILENT -- it builds, trains, produces a best.pt
+                # and lands in a table as the large arm, with the only symptom
+                # being a 28 M-parameter row reporting 1.6 M. yn.pretrained_for
+                # resolves it once and raises with the download command if the
+                # file is absent.
+                yn.train_native(yn.pretrained_for(r.family, env.paths_for_models()),
+                                rd / "data.yaml", rd, cfg, r.seed)
                 print(f"  -> trained in {(time.time()-t0)/60:.1f} min")
             else:
                 print(f"  !! unhandled kind={r.kind}; left MISSING"); continue
@@ -1523,6 +1647,143 @@ between two human annotators.
 bound is ≈1.6 %, which spans this entire field.
 """)
 
+# ── Stage Y · YOLO26-large ───────────────────────────────────────────────────
+md(r"""
+---
+# Stage Y · YOLO26-large, native Ultralytics, native argmax
+
+**The question.** `yolo26n` is the fastest model in the study (8.02 ms, 1.63 M
+params, fresh-process) and has the **worst complete-miss rate of the reporting
+models** — 6.5 % native-argmax at its best seed, against 0.0–0.5 % for the
+SegFormers. §D3 is explicit that miss containment, not Dice, is the endpoint this
+study is judged on. So the obvious question the nano arms cannot answer is
+whether that miss rate is a property of *YOLO* or a property of *1.6 M
+parameters*.
+
+Stage Y answers it the only way that isolates the variable: **the identical
+native recipe on the large backbone**. Same mosaic, same EMA, same letterbox,
+same LR schedule, same `close_mosaic`, same seed handling — `yolo26l-sem.pt`
+instead of `yolo26n-sem.pt`, and nothing else.
+
+**Native argmax only.** The custom `/255` path exists for Stage A because that
+stage needed a SegFormer-comparable geometry; it is not re-derived here. Argmax
+is parameter-free, so a Stage Y run needs `best.pt` and nothing else — no
+val-fitted cut, no `operating_point.json`, nothing that can be missing.
+
+**Its own stage letter.** Stage A is quoted as "the five headline models" in the
+handbook and in the paper. A table that silently grows two rows is
+indistinguishable from a bug, so Stage Y is scanned, planned, costed and reported
+separately — exactly the reasoning that gave Stage H its own letter.
+
+**One arm, one seed.** Stage Y registers `yolo_sem_l_direct` and nothing else.
+A distilled large arm (`yolo_sem_l_distilled`) has a spec and a cost estimate but
+is deliberately unregistered — it answers a different question, and leaving it on
+would make `RUN_STAGES = "...Y"` cost ~4 GPU-hours nobody asked for. One line in
+`registry.STAGE_Y_FAMILIES` enables it when that question is being asked.
+
+`YOLO_L_SEEDS = (0,)`. At ~3.5 h a run, the three-seed
+habit that costs 1.5 GPU-hours in Stage E costs 21 here. One seed answers "does
+capacity fix the miss rate?"; three are worth buying once the answer is yes and
+you want to quote a spread. **A one-seed result is not a rate** (§15, trap 12) —
+read it as a direction, and if it points the right way, buy the other two seeds
+before it goes in a table.
+
+**What it needs.** `pretrained_weights/yolo26l-sem.pt`, ~50 MB, which the bundle
+does not ship. §2 reports it as a WARN, not a preflight failure — a session not
+running Stage Y should not be blocked by a file it will never open. Fetch once:
+
+```python
+from ultralytics import YOLO; YOLO("yolo26l-sem.pt")   # then move it into pretrained_weights/
+```
+
+Turn the stage on with `RUN_STAGES = "ABCDEHY"` and `ALLOW_TRAINING = True`.
+""")
+
+code(r'''
+trained_Y = train_missing("Y", reg, CFG) if "Y" in RUN_STAGES else []
+''')
+
+code(r'''
+# Score every Stage Y run that HAS WEIGHTS -- not only the ones trained just now.
+#
+# Gating on `trained_Y` (as Stages E and H do) has a trap: `train_missing`
+# returns only what it trained in THIS session, so a run finished in an earlier
+# session is never scored. You end up with a best.pt and no CSV, permanently,
+# and re-running does not help because there is nothing left to train. Reading
+# the registry instead makes this cell idempotent -- run it as often as you like.
+#
+# No threshold sweep, no val pass, no operating point: argmax has no parameter to
+# fit. That is why this is short where Stage H is forty lines.
+from bruisekit.registry import WEIGHTS as _W
+
+_y_runs = sorted([r for r in reg.runs.values() if r.stage == "Y" and r.tier == _W],
+                 key=lambda r: r.run_id)
+if _y_runs:
+    import bruisekit.yolo_native as yn
+
+    y_rows = []
+    for run in _y_runs:
+        run_id, best_pt = run.run_id, run.weights
+        # .../<run_id>/ultralytics_runs/train/weights/best.pt -> .../<run_id>/
+        rd = best_pt.parents[3]
+        pi_path = rd / "test_per_image_native_argmax.csv"
+        if pi_path.exists():
+            # Already scored. Re-reading is exact and free; re-predicting 185
+            # images is neither, and would also let a re-run silently overwrite
+            # the table a published number came from.
+            tpi = pd.read_csv(pi_path)
+            summ = {"mean_dice": float(tpi["dice"].mean()),
+                    "median_dice": float(tpi["dice"].median()),
+                    "complete_miss_rate": float((tpi["dice"] == 0).mean())}
+            print(f"  {run_id:<30} cached")
+        else:
+            tpi, summ = yn.predict_native_argmax(best_pt, MAN["test"], env.data,
+                                                 CFG["img_size"])
+            tpi.to_csv(pi_path, index=False)
+        y_rows.append({"run_id": run_id, "model": run.family, "seed": run.seed,
+                       "path": "native_argmax", **summ})
+        print(f"  {run_id:<30} test Dice {summ['mean_dice']:.4f}  "
+              f"miss {summ['complete_miss_rate']*100:.2f}%")
+        print(f"     per-image -> {pi_path}")
+
+    Y_TEST = pd.DataFrame(y_rows)
+    out_dir = env.results / "yolo_l"; out_dir.mkdir(parents=True, exist_ok=True)
+    _summary = out_dir / "yolo_l_test_per_seed.csv"
+    Y_TEST.to_csv(_summary, index=False)
+    print(f"\n  summary   -> {_summary}")
+    display(Y_TEST.round(4))
+
+    # The comparison the stage exists for, stated as a contrast rather than left
+    # for the reader to eyeball out of two tables in different sections.
+    nano = reg.get("yolo_sem_direct__seed2")          # its val-selected best seed
+    nano_pi = nano.per_image if nano is not None else None
+    if nano_pi is not None and Path(nano_pi).exists():
+        n = pd.read_csv(nano_pi)
+        n_miss = float((n["dice"] == 0).mean())
+        for r in y_rows:
+            print(f"\n  MISS RATE  yolo26n {n_miss*100:.2f}%  ->  "
+                  f"{r['model']} {r['complete_miss_rate']*100:.2f}%")
+            print("  A single seed cannot support a rate claim (15, trap 12). If this "
+                  "moved the right way, buy seeds 1 and 2 before quoting it.")
+else:
+    # Distinguish "not asked for" from "asked for and nothing landed" -- they need
+    # different fixes and printing one message for both is how a failed run gets
+    # mistaken for a skipped one.
+    _expected = env.runs / f"yolo_sem_l_direct__seed{YOLO_L_SEEDS[0]}"
+    _bp = _expected / "ultralytics_runs" / "train" / "weights" / "best.pt"
+    if "Y" not in RUN_STAGES:
+        print("Stage Y not requested -- add 'Y' to RUN_STAGES in section 0.")
+    elif _bp.exists():
+        print(f"best.pt EXISTS at {_bp} but the registry did not resolve it.")
+        print("     Check that WORK_DIR points at the tree containing runs/ -- "
+              "the search path is printed in section 1.")
+    else:
+        print(f"Stage Y has no weights yet. Expected:\n     {_bp}")
+        print(f"     exists: run dir {_expected.is_dir()}")
+        print("     needs pretrained_weights/yolo26l-sem.pt (~50 MB, not shipped)")
+        print("     cost ~3.5 h on an A100; set ALLOW_TRAINING = True to train it")
+''')
+
 # ── Stage D ──────────────────────────────────────────────────────────────────
 md(r"""
 ---
@@ -1850,28 +2111,118 @@ else:
 md(r"""
 ## D8 · Speed and cost
 
-Latency is measured per 640×640 tensor on GPU. Reported from the shipped
-benchmark unless you re-time it — timings taken on a different machine are not
-comparable to the published ones, so the bundle's numbers are kept as the
-reference.
+### ⚠️ The shipped `benchmark_640.csv` is wrong in three of its five rows
+
+Measured 2026-08-04. Same notebook, same cell, same A100-SXM4-40GB, same weights,
+same `torch 2.11.0+cu128`, same `transformers 5.13.1`, same TF32 flags. The one
+difference: a **fresh kernel**, running §1–§5 and then jumping straight to the
+speed cell, instead of running the whole notebook first.
+
+| model | shipped | fresh kernel | |
+|---|---|---|---|
+| segformer_b2_teacher | 33.649 ms — 29.7 FPS | **19.738 — 50.7** | **1.70× off** |
+| segformer_b0_direct | 16.553 — 60.4 | **9.452 — 105.8** | **1.75× off** |
+| segformer_b0_distilled | 16.762 — 59.7 | **9.578 — 104.4** | **1.75× off** |
+| yolo_sem_direct | 8.130 — 123.0 | 8.024 — 124.6 | 1.01× |
+| yolo_sem_distilled | 8.084 — 123.7 | 8.072 — 123.9 | 1.00× |
+
+**All three `transformers` models inflated ~1.72×. Both convolutional models
+untouched, to within 1.3%.**
+
+### Why "it reproduced" was not evidence
+
+60 FPS was measured in July and again in August and agreed to **0.8%**. That read
+as reproducibility and was trusted on that basis for weeks. It was not: **both
+runs executed the full notebook first**, so both inherited the same process
+state. A number can be perfectly repeatable and still be an artifact —
+repeatability only tests what you varied, and the process state was never varied
+until it was tested directly.
+
+### What the number is actually a property of
+
+Not the model. It is a property of *(model, host, library versions, and what the
+process did beforehand)* — and only the first of those travels with the bundle.
+Four independent measurements of SegFormer-B0 in clean processes agree:
+
+    ORC A100 MIG, fp32          9.294 ms
+    Colab speed-harness         9.870
+    Colab fresh kernel          9.452
+    the 51-run registry sweep   8.740
+
+…all inside the ±5–6% run-to-run drift these models show anyway. The 16.55 ms row
+is the sole outlier, and every "cross-machine SegFormer anomaly" chased in the
+handbook (§7.3, §14 caveat 6) traces back to it.
+
+### Why only the transformers
+
+At batch 1 with `cuda.synchronize()` on both sides, this benchmark is dominated
+by kernel dispatch, not FLOPs — PP-MobileSeg (1.45 M) is *slower* here than
+DeepLabV3+/R50 (26.7 M). SegFormer's cost sits in GEMM and attention; the CNNs'
+sits in cuDNN convolutions. The artifact hits the first and not the second, which
+points at a GEMM/attention fast path being lost. **Not yet bisected to a specific
+call** — so that is a lead, not a finding, and is written here as one.
+
+The related result, confirmed on two machines across 21 model-pairs with zero
+exceptions: **`autocast` makes every one of these models slower at batch 1**
+(1.27–1.44×), except the two big ResNets. More casts to dispatch, no compute won
+back.
+
+### The rule this leaves
+
+Time in a fresh process, on one machine, and record both. `speed_table` now
+carries `fresh_process` and `process_prior_peak_MB` on every row and warns when
+asked to benchmark inside a process that has already touched the GPU. A row
+without those columns predates the check and cannot be verified.
 """)
 
 code(r'''
 bench_path = env.results / "final" / "benchmark_640.csv"
 if bench_path.exists():
     BENCH = pd.read_csv(bench_path)
-    display(BENCH.round(3))
+
+    # Flag the inflated rows rather than displaying them plainly. Hardcoded
+    # because these are measurements, not derivations -- and because a reader who
+    # displays this table must not be able to see the old number without also
+    # seeing that it is superseded. Once the CSV is regenerated in a fresh
+    # process these annotations stop matching; delete them then, do not update.
+    FRESH_KERNEL_2026_08_04 = {          # median_ms, Colab A100-SXM4-40GB
+        "segformer_b2_teacher":   19.738,
+        "segformer_b0_direct":     9.452,
+        "segformer_b0_distilled":  9.578,
+        "yolo_sem_direct":         8.024,
+        "yolo_sem_distilled":      8.072,
+    }
+    B = BENCH.copy()
+    B["fresh_ms"] = B["model"].map(FRESH_KERNEL_2026_08_04)
+    B["inflation"] = (B["median_ms"] / B["fresh_ms"]).round(3)
+    B["status"] = np.where(B["inflation"] > 1.1, "SUPERSEDED -- artifact", "ok")
+    display(B[["model", "params_M", "median_ms", "fps", "fresh_ms",
+               "inflation", "status"]].round(3))
+
+    n_bad = int((B["inflation"] > 1.1).sum())
+    if n_bad:
+        print(f"\n  {n_bad} of {len(B)} rows are inflated by a stale-process artifact "
+              f"(see the section above). Do NOT quote their median_ms or fps.")
+        print("  Regenerate with D9 in a FRESH kernel: Restart, then run "
+              "§0-§4 and D9 only.")
     if ALL:
+        # Plotted from fresh_ms, NOT median_ms. The old figure placed SegFormer-B0
+        # at 60 FPS and YOLO at 123, which reads as a 2x speed advantage for YOLO
+        # and was used that way. Corrected, it is 9.45 vs 8.02 ms -- an 18% gap,
+        # not 2x. That is the substantive consequence of this artifact, so the
+        # figure must not be drawable from the superseded column.
         fig, ax = plt.subplots(figsize=(8.5, 4.6))
-        for i, r in enumerate(BENCH.itertuples()):
+        for i, r in enumerate(B.itertuples()):
             d = ALL.get(r.model)
-            if d is None:
+            x = r.fresh_ms if pd.notna(r.fresh_ms) else None
+            if d is None or x is None:
                 continue
-            ax.scatter(r.median_ms, d.dice.mean(), s=40 + r.params_M * 12,
+            ax.scatter(x, d.dice.mean(), s=40 + r.params_M * 12,
                        color=PALETTE[i % len(PALETTE)], alpha=.85, zorder=3)
-            ax.annotate(f"{r.model}\n{r.params_M:.1f}M", (r.median_ms, d.dice.mean()),
+            ax.annotate(f"{r.model}\n{r.params_M:.1f}M", (x, d.dice.mean()),
                         textcoords="offset points", xytext=(8, -4), fontsize=8)
-        ax.set_xlabel("median latency per image (ms)"); ax.set_ylabel("mean Dice")
+        ax.set_xlabel("median latency per image (ms) — fresh process, Colab A100")
+        ax.set_ylabel("mean Dice")
         ax.set_title("Accuracy vs latency (marker area ~ parameter count)")
         save(fig, "D8_speed_vs_accuracy"); plt.show()
 else:
@@ -1901,21 +2252,53 @@ which are not the same thing and are reported separately:
 Set `RUN_INFERENCE_BLOCK = True` in §0. `INFERENCE_MODELS` takes any registry
 family, so timing the mobile and gated arms needs no new code.
 
-**Three things it will not let you do.** A speed table that mixes devices raises
+**Four things it will not let you do.** A speed table that mixes devices raises
 rather than writes — the shipped Stage A rows are full-A100 and the Stage E rows
-are an A100 MIG slice, so those two are *already* not one table. A YOLO row is
-labelled `yolo_native_raw_forward` and a SegFormer row `segformer`, because the
-first times a forward and the second times a forward plus a threshold. And a CPU
-run is tagged `device == "cpu"`, timed over a 16-image subset, and written to a
-differently-named file, so it can never be mistaken for a publishable number.
+are an A100 MIG slice, so those two are *already* not one table. It also raises
+on a table that mixes **precisions**, because a fp16 row and a fp32 row of the
+same model differ by ~1.4× and that reads exactly like a hardware difference. A
+YOLO row is labelled `yolo_native_raw_forward` and a SegFormer row `segformer`,
+because the first times a forward and the second times a forward plus a
+threshold. And a CPU run is tagged `device == "cpu"`, timed over a 16-image
+subset, and written to a differently-named file, so it can never be mistaken for
+a publishable number.
+
+### ⚠️ Restart the kernel before you believe a speed row
+
+**This is the one operational rule D8 exists to teach.** A `speed_table` run in a
+process that has already trained or scored anything reported SegFormer-B0 at
+1.75× its true latency — reproducibly, twice, three weeks apart. Every row now
+carries `fresh_process` and `process_prior_peak_MB`, and the cell prints a loud
+warning when they are wrong, but the check can only tell you the row is suspect;
+it cannot repair it.
+
+For a publishable speed table: **Restart kernel → run §0–§4 → run D9.** Nothing
+else. The inference pass (accuracy) is unaffected and can be run any time — it is
+only the *timing* that is contaminated by process state.
 """)
 
 code(r'''
 if RUN_INFERENCE_BLOCK:
+    import torch as _torch
     from bruisekit import inference as INF
 
+    # Say it before the work starts, not after: on a GPU this is the difference
+    # between a publishable row and a 1.75x artifact, and after 20 minutes of
+    # benchmarking nobody re-reads the preamble.
+    if str(env.device).startswith("cuda"):
+        _prior = _torch.cuda.max_memory_allocated(env.device) / 1e6
+        if _prior > 0:
+            print(f"!! NOT A FRESH PROCESS -- {_prior:.0f} MB already peaked on this GPU.")
+            print("!! The ACCURACY half below is fine. The SPEED half is not "
+                  "publishable from this kernel.")
+            print("!! Restart, then run only §0-§4 and D9.\n")
+        else:
+            print("fresh process -- speed rows from this kernel are publishable\n")
+
     _models = tuple(INFERENCE_MODELS) if INFERENCE_MODELS else INF.DEFAULT_MODELS
-    INFER = INF.run(env, reg, CFG, MAN, MAN640, _models)
+    INFER = INF.run(env, reg, CFG, MAN, MAN640, _models,
+                    precision=INFERENCE_PRECISION,
+                    machine_tag=MACHINE_TAG)
 
     # The reconciliation is the one to read first. A large max_abs_dice_delta
     # beside a tiny mean_dice_delta is the signature of a SEED MISMATCH, not of
@@ -1924,12 +2307,26 @@ if RUN_INFERENCE_BLOCK:
     # with the wrong seed's table shows per-image gaps up to 0.49 Dice.
     if "reconcile" in INFER:
         display(INFER["reconcile"].round(6))
+
     if "speed" in INFER and len(INFER["speed"]):
-        display(INFER["speed"].round(3))
+        SPEED = INFER["speed"]
+        display(SPEED[["model", "params_M", "median_ms", "fps", "p95_ms",
+                       "peak_incremental_MB", "precision", "fresh_process"]].round(3))
+
+        if not bool(SPEED["fresh_process"].iloc[0]):
+            print("\n  ^ fresh_process is False on every row above. Treat these as "
+                  "diagnostics, not results.")
+        else:
+            print(f"\n  All rows fresh_process=True on {SPEED['device_name'].iloc[0]}. "
+                  f"Quotable, for THIS machine only.")
+            print("  To replace the superseded D8 rows, copy this table over "
+                  "results/final/benchmark_640.csv and delete D8's "
+                  "FRESH_KERNEL_2026_08_04 annotations.")
 else:
     print("D9 skipped -- set RUN_INFERENCE_BLOCK = True in section 0 to run it.")
     print("     inference pass: a couple of minutes on a GPU, ~2 min per SegFormer on CPU")
-    print("     speed table:    seconds, but ONLY meaningful on a GPU")
+    print("     speed table:    seconds, but ONLY meaningful on a GPU, and only")
+    print("                     from a freshly restarted kernel (see D8)")
 ''')
 
 # ── Stage G ──────────────────────────────────────────────────────────────────
