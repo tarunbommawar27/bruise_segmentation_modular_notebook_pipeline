@@ -37,6 +37,7 @@ input here, never an output.
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 import pandas as pd
@@ -101,6 +102,12 @@ FAMILY_SPEC = {
     # what the study gives up meanwhile.
     "yolo_sem_rgkd": {"arch": "yolo", "size": None, "distill": True,
                       "teacher": "segformer_b2_teacher", "kd": "gated"},
+    # Stage Y -- YOLO26-large. `size` is carried rather than left None (as the
+    # nano arms leave it) so that anything reading the spec can tell the two
+    # backbones apart without pattern-matching the family name.
+    "yolo_sem_l_direct": {"arch": "yolo", "size": "l", "distill": False},
+    "yolo_sem_l_distilled": {"arch": "yolo", "size": "l", "distill": True,
+                             "teacher": "segformer_b2_teacher"},
     "fastscnn_rgkd": {"arch": "fastscnn", "size": None, "distill": True,
                       "teacher": "segformer_b2_teacher", "kd": "gated"},
     "lraspp_mobilenetv3_rgkd": {"arch": "lraspp_mobilenetv3", "size": None,
@@ -167,6 +174,123 @@ def build_for_load(env, family: str, smp_encoder: str = "resnet50"):
     return SMPNet(spec["arch"], encoder=smp_encoder, encoder_weights=None)
 
 
+# ── SegFormer module-layout reconciliation ───────────────────────────────────
+# HuggingFace refactored SegformerForSemanticSegmentation's internal module names,
+# so a checkpoint saved under one `transformers` version raises a missing/unexpected
+# key RuntimeError against a skeleton built by another. This is the same mapping
+# `scripts/26_migrate_legacy_segformer_checkpoints.py` derived and verified against
+# two independent checkpoints; it is applied here at LOAD time rather than by
+# rewriting the .pt, because which direction is needed depends on the machine and
+# a bundle is copied between machines with different versions installed.
+#
+# "OLD" is the encoder.block.N.M layout, "NEW" is stages.N.blocks.M.
+_SEGFORMER_OLD_TO_NEW: list[tuple[str, str]] = [
+    (r"encoder\.patch_embeddings\.(\d+)\.", r"stages.\1.patch_embeddings."),
+    (r"encoder\.layer_norm\.(\d+)\.", r"stages.\1.layer_norm."),
+    (r"encoder\.block\.(\d+)\.(\d+)\.layer_norm_1\.", r"stages.\1.blocks.\2.layernorm_before."),
+    (r"encoder\.block\.(\d+)\.(\d+)\.layer_norm_2\.", r"stages.\1.blocks.\2.layernorm_after."),
+    (r"encoder\.block\.(\d+)\.(\d+)\.attention\.self\.query\.",
+     r"stages.\1.blocks.\2.attention.q_proj."),
+    (r"encoder\.block\.(\d+)\.(\d+)\.attention\.self\.key\.",
+     r"stages.\1.blocks.\2.attention.k_proj."),
+    (r"encoder\.block\.(\d+)\.(\d+)\.attention\.self\.value\.",
+     r"stages.\1.blocks.\2.attention.v_proj."),
+    (r"encoder\.block\.(\d+)\.(\d+)\.attention\.self\.sr\.",
+     r"stages.\1.blocks.\2.attention.sequence_reduction.sequence_reduction."),
+    (r"encoder\.block\.(\d+)\.(\d+)\.attention\.self\.layer_norm\.",
+     r"stages.\1.blocks.\2.attention.sequence_reduction.layer_norm."),
+    (r"encoder\.block\.(\d+)\.(\d+)\.attention\.output\.dense\.",
+     r"stages.\1.blocks.\2.attention.o_proj."),
+    (r"encoder\.block\.(\d+)\.(\d+)\.mlp\.dense1\.", r"stages.\1.blocks.\2.mlp.fc1."),
+    (r"encoder\.block\.(\d+)\.(\d+)\.mlp\.dense2\.", r"stages.\1.blocks.\2.mlp.fc2."),
+    # The depthwise conv keeps its own name but still moves under stages.N.blocks.M.
+    # Omitting this rule leaves those keys old-style, which fails the exact key-set
+    # check and blocks an otherwise valid remap.
+    (r"encoder\.block\.(\d+)\.(\d+)\.mlp\.dwconv\.dwconv\.",
+     r"stages.\1.blocks.\2.mlp.dwconv.dwconv."),
+    (r"decode_head\.linear_c\.(\d+)\.", r"decode_head.linear_projections.\1."),
+]
+
+# The inverse. Written out rather than derived, because inverting a regex with
+# capture groups programmatically is a good way to produce a mapping that is
+# almost right -- and "almost right" here means weights loaded into the wrong
+# tensor, which scores plausibly and is wrong.
+_SEGFORMER_NEW_TO_OLD: list[tuple[str, str]] = [
+    (r"stages\.(\d+)\.patch_embeddings\.", r"encoder.patch_embeddings.\1."),
+    (r"stages\.(\d+)\.layer_norm\.", r"encoder.layer_norm.\1."),
+    (r"stages\.(\d+)\.blocks\.(\d+)\.layernorm_before\.", r"encoder.block.\1.\2.layer_norm_1."),
+    (r"stages\.(\d+)\.blocks\.(\d+)\.layernorm_after\.", r"encoder.block.\1.\2.layer_norm_2."),
+    (r"stages\.(\d+)\.blocks\.(\d+)\.attention\.q_proj\.",
+     r"encoder.block.\1.\2.attention.self.query."),
+    (r"stages\.(\d+)\.blocks\.(\d+)\.attention\.k_proj\.",
+     r"encoder.block.\1.\2.attention.self.key."),
+    (r"stages\.(\d+)\.blocks\.(\d+)\.attention\.v_proj\.",
+     r"encoder.block.\1.\2.attention.self.value."),
+    (r"stages\.(\d+)\.blocks\.(\d+)\.attention\.sequence_reduction\.sequence_reduction\.",
+     r"encoder.block.\1.\2.attention.self.sr."),
+    (r"stages\.(\d+)\.blocks\.(\d+)\.attention\.sequence_reduction\.layer_norm\.",
+     r"encoder.block.\1.\2.attention.self.layer_norm."),
+    (r"stages\.(\d+)\.blocks\.(\d+)\.attention\.o_proj\.",
+     r"encoder.block.\1.\2.attention.output.dense."),
+    (r"stages\.(\d+)\.blocks\.(\d+)\.mlp\.fc1\.", r"encoder.block.\1.\2.mlp.dense1."),
+    (r"stages\.(\d+)\.blocks\.(\d+)\.mlp\.fc2\.", r"encoder.block.\1.\2.mlp.dense2."),
+    (r"stages\.(\d+)\.blocks\.(\d+)\.mlp\.dwconv\.dwconv\.",
+     r"encoder.block.\1.\2.mlp.dwconv.dwconv."),
+    (r"decode_head\.linear_projections\.(\d+)\.", r"decode_head.linear_c.\1."),
+]
+
+
+def _looks_like_segformer_layout_clash(err: Exception) -> bool:
+    """Is this RuntimeError the transformers-layout rename, or a real mismatch?
+
+    Only the rename is safe to paper over. A genuine architecture mismatch -- a
+    different backbone size, a different head -- must still raise, because
+    remapping it would either fail again or, worse, half-succeed.
+    """
+    s = str(err)
+    return ("Missing key(s)" in s or "Unexpected key(s)" in s) and (
+        "segformer" in s or "decode_head" in s)
+
+
+def _remap(state: dict, rules: list[tuple[str, str]]) -> dict:
+    out = {}
+    for k, v in state.items():
+        nk = k
+        for pattern, repl in rules:
+            cand = re.sub(pattern, repl, nk)
+            if cand != nk:
+                nk = cand
+                break
+        out[nk] = v
+    return out
+
+
+def _reconcile_segformer_layout(model, state: dict) -> tuple[dict, str]:
+    """Return (state_dict that loads strictly, which direction was applied).
+
+    Both directions are tried and each is CHECKED against the model's own key set
+    before being returned -- a remap that merely reduces the number of missing
+    keys is not a fix, and accepting one would load a checkpoint into a skeleton
+    it does not match. Raises the original problem as a ValueError if neither
+    direction produces an exact key-set match.
+    """
+    want = set(model.state_dict().keys())
+    for rules, name in ((_SEGFORMER_OLD_TO_NEW, "OLD->NEW"),
+                        (_SEGFORMER_NEW_TO_OLD, "NEW->OLD")):
+        cand = _remap(state, rules)
+        if set(cand.keys()) == want:
+            return cand, name
+    have = set(state.keys())
+    raise ValueError(
+        "SegFormer checkpoint does not match the model built by the installed "
+        "transformers, and neither layout remapping reconciles them.\n"
+        f"  model wants {len(want)} keys, checkpoint has {len(have)}\n"
+        f"  example missing: {sorted(want - have)[:2]}\n"
+        f"  example unexpected: {sorted(have - want)[:2]}\n"
+        "  This is not the known encoder/stages rename -- check the transformers "
+        "version and that the checkpoint is the model you think it is.")
+
+
 def load_model(env, run, smp_encoder: str = "resnet50"):
     """Load a `Run`'s checkpoint into a model, ready for eval. Returns (model, cut).
 
@@ -188,15 +312,41 @@ def load_model(env, run, smp_encoder: str = "resnet50"):
         raise ValueError(f"{run.run_id} has no checkpoint (tier={run.tier})")
     model = build_for_load(env, run.family, smp_encoder)
     state = torch.load(str(run.weights), map_location="cpu", weights_only=True)
-    model.load_state_dict(state)
+    try:
+        model.load_state_dict(state)
+    except RuntimeError as e:
+        if "size mismatch" in str(e) or not _looks_like_segformer_layout_clash(e):
+            raise
+        state, direction = _reconcile_segformer_layout(model, state)
+        print(f"  NOTE  {run.run_id}: remapped {direction} SegFormer keys to match the "
+              f"installed transformers. The checkpoint is fine; the module layout "
+              f"differs between the version that saved it and the one here.")
+        model.load_state_dict(state)
     model.to(env.device).eval()
 
-    op = run.weights.parent / "operating_point.json"
-    if not op.exists():
+    # The cut comes from whichever threshold file the registry actually found.
+    # Two dialects exist and they are NOT interchangeable: `operating_point.json`
+    # stores `cut`, a logit; the teacher store's `threshold.json` stores
+    # `threshold`, a probability. sigmoid(cut) == threshold, so reading one as
+    # the other does not raise -- it silently moves the decision boundary, which
+    # on this data shifts the complete-miss rate by several points. `read_cut`
+    # is the single place that knows the difference.
+    from bruisekit.registry import read_cut
+
+    tf = getattr(run, "threshold_file", None)
+    if tf is None:                                   # pre-search-path Run objects
+        tf = run.weights.parent / "operating_point.json"
+        tf = tf if tf.exists() else None
+    if tf is None:
         raise FileNotFoundError(
-            f"{run.run_id}: checkpoint present but operating_point.json missing. "
-            f"Its test score is undefined without the val-fitted cut.")
-    return model, json.loads(op.read_text())["cut"]
+            f"{run.run_id}: checkpoint present but no threshold file "
+            f"(operating_point.json or threshold.json) beside it at "
+            f"{run.weights.parent}. Its test score is undefined without the "
+            f"val-fitted cut.")
+    cut = read_cut(tf)
+    if cut is None:
+        raise ValueError(f"{run.run_id}: {tf} yielded no usable cut")
+    return model, cut
 
 
 def score_segformer(env, run, cfg, cache640_manifests, smp_encoder="resnet50") -> pd.DataFrame:

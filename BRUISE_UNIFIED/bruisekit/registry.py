@@ -74,6 +74,13 @@ COST_HOURS = {
     "topformer_tiny_rgkd": 0.9, "ppmobileseg_tiny_rgkd": 1.0,
     "fastscnn_b2kd": 0.8, "lraspp_mobilenetv3_b2kd": 0.9,
     "topformer_tiny_b2kd": 0.9, "ppmobileseg_tiny_b2kd": 1.0,
+    # Stage Y -- YOLO26-LARGE. Scaled from the nano arms by parameter count
+    # (~1.6 M -> ~28 M, so ~17x the FLOPs per step) and then damped, because
+    # native Ultralytics training is substantially dataloader-bound at 697
+    # images: mosaic, letterbox and augmentation run on the CPU regardless of
+    # how big the network is. Treat as an estimate, not a measurement -- unlike
+    # every other row here, no yolo26l run has finished yet to calibrate it.
+    "yolo_sem_l_direct": 3.5, "yolo_sem_l_distilled": 4.0,
 }
 
 # Stage E families, in the order they should appear in tables. The distilled arms
@@ -114,6 +121,153 @@ STAGE_H_FAMILIES = (
 # re-deriving how it is scanned.
 STAGE_H_KIND = {"segformer_b0_rgkd": "segformer"}
 
+# ── Stage Y · YOLO26-large ───────────────────────────────────────────────────
+# The same native-Ultralytics recipe as Stage A's YOLO arms, on the LARGE
+# backbone instead of nano. Its own stage letter for the reason Stage H got one:
+# Stage A is "the five headline models", it is quoted with that count in the
+# handbook and in the paper, and a table that silently grows two rows is
+# indistinguishable from a bug.
+#
+# WHY LARGE AT ALL. yolo26n is 1.63 M parameters and is the fastest model in the
+# study, but it also has the worst complete-miss rate of the reporting models
+# (6.5% native-argmax at its best seed against 0.0-0.5% for the SegFormers).
+# Miss containment, not Dice, is the endpoint this study is judged on (§D3), so
+# "the same architecture with enough capacity to stop missing" is the obvious
+# question the nano arms cannot answer.
+#
+# SCORED BY NATIVE ARGMAX ONLY. The custom /255 path exists for the nano arms
+# because Stage A needed a SegFormer-comparable geometry; it is not re-derived
+# here. Native argmax is parameter-free -- there is no threshold to fit on val,
+# so a Stage Y run needs `best.pt` and nothing else, exactly like Stage A's YOLO.
+# ONE ARM. `yolo_sem_l_distilled` has a FAMILY_SPEC and a cost estimate but is
+# deliberately NOT registered, exactly as `yolo_sem_rgkd` is not -- so nothing
+# schedules it and `RUN_STAGES = "...Y"` cannot quietly cost an extra ~4 GPU-hours
+# for an arm nobody asked for. Stage Y asks one question ("does capacity fix
+# yolo26n's miss rate?") and one direct arm answers it; a distilled arm answers a
+# different question and should be turned on when that question is being asked:
+#
+#     STAGE_Y_FAMILIES = ("yolo_sem_l_direct", "yolo_sem_l_distilled")
+STAGE_Y_FAMILIES = ("yolo_sem_l_direct",)
+
+# ── Stage T · the teacher store ──────────────────────────────────────────────
+# Seedless, val-selected teacher checkpoints under checkpoints/distill/teachers/.
+# Never trained by this notebook -- they are inputs, and a MISSING one is a
+# statement about the bundle rather than a job about to start.
+TEACHER_FAMILIES = ("segformer_b2_teacher", "segformer_b5_teacher",
+                    "segformer_b0_distilled")
+
+
+# ── the three on-disk layouts ────────────────────────────────────────────────
+# Checkpoints in this study were written by three different pipelines over about
+# a year, and they do not agree on filenames, on where the threshold lives, or on
+# whether a run directory carries a seed at all. Each layout is described once,
+# here, so that adding a fourth means adding a row rather than editing every
+# _scan_stage_* method.
+#
+#   STANDARD   <root>/<family>__seed<N>/best.pt        + operating_point.json
+#              Stages A, B, E, F, H, and anything trained by this notebook.
+#              `operating_point.json` carries `cut`, a LOGIT threshold.
+#
+#   YOLO       <root>/<family>__seed<N>/ultralytics_runs/train/weights/best.pt
+#              No threshold file and none needed -- native argmax is
+#              parameter-free, so weights alone make the run usable.
+#
+#   TEACHER    <root>/<family>/best_model.pt           + threshold.json
+#              The B2/B5/B0-distilled store. NO SEED IN THE PATH, and the
+#              threshold is a PROBABILITY, not a logit. B5's own
+#              seed_selection.csv records its selected seed as 123 -- so a
+#              registry that only ever asks for seeds 0/1/2 could not see it
+#              even if the filenames matched, which is why it has been invisible.
+_LAYOUTS = ("standard", "yolo", "teacher")
+
+
+def _probe_layout(run_dir: Path, layout: str):
+    """Return (weights, threshold_file) for `layout` under `run_dir`, or None.
+
+    A run counts only when BOTH parts a given layout needs are present. A
+    checkpoint without its threshold is not a usable model for a logit-thresholded
+    family -- its test score is undefined without the cut fitted on validation --
+    and half-answering here is what produces a WEIGHTS-tier run that fails at load.
+    """
+    if layout == "standard":
+        w, t = run_dir / "best.pt", run_dir / "operating_point.json"
+        return (w, t) if w.exists() and t.exists() else None
+    if layout == "yolo":
+        w = run_dir / "ultralytics_runs" / "train" / "weights" / "best.pt"
+        return (w, None) if w.exists() else None      # argmax needs no threshold
+    if layout == "teacher":
+        w = run_dir / "best_model.pt"
+        if not w.exists():
+            return None
+        # The threshold is OPTIONAL here, unlike the standard layout, and the two
+        # dialects coexist inside this one store: B5 ships threshold.json (a
+        # probability), B2 ships operating_point.json (a logit), B0-distilled
+        # ships neither. Absent is still usable -- a teacher is consumed as SOFT
+        # PROBABILITIES by the KD loss and never thresholded, so demanding a cut
+        # would report the fairest teacher in the study as unusable for the one
+        # job it is actually for. `load_model` raises if a cut is later needed
+        # and none was found.
+        for cand in ("threshold.json", "operating_point.json"):
+            if (run_dir / cand).exists():
+                return w, run_dir / cand
+        return w, None
+    raise ValueError(f"unknown layout {layout!r}")
+
+
+def find_checkpoint(roots, family: str, seed=None, layouts=_LAYOUTS):
+    """Search every root x every layout for one family's checkpoint.
+
+    Returns (weights, threshold_file, root, layout, dir) or None.
+
+    Roots are tried in order and the first hit wins, so `env.runs` beating
+    `checkpoints/final/` is a property of the search path rather than of a
+    conditional somewhere. Within a root the layouts are cheap `exists()` calls.
+
+    A seeded directory is preferred over a seedless one when a seed is given: the
+    teacher store's `segformer_b2_teacher/` and Stage A's
+    `segformer_b2_teacher__seed0/` are DIFFERENT checkpoints of the same family,
+    and quietly serving one where the other was asked for is exactly the class of
+    substitution this function exists to make visible.
+    """
+    names = []
+    if seed is not None:
+        names.append(f"{family}__seed{seed}")
+    names.append(family)
+    for root in roots:
+        root = Path(root)
+        if not root.is_dir():
+            continue
+        for name in names:
+            rd = root / name
+            if not rd.is_dir():
+                continue
+            for layout in layouts:
+                hit = _probe_layout(rd, layout)
+                if hit:
+                    return hit[0], hit[1], root, layout, rd
+    return None
+
+
+def read_cut(threshold_file) -> float | None:
+    """The logit cut, from either threshold-file dialect.
+
+    `operating_point.json` stores `cut` (a logit). `threshold.json` stores
+    `threshold` (a probability). They are the same operating point expressed two
+    ways -- sigmoid(cut) == threshold -- and mixing them up silently shifts the
+    decision boundary rather than raising, which on this data moves the
+    complete-miss rate by several points.
+    """
+    if threshold_file is None:
+        return None
+    d = json.loads(Path(threshold_file).read_text())
+    if "cut" in d:
+        return float(d["cut"])
+    if "threshold" in d:
+        import math
+        p = min(max(float(d["threshold"]), 1e-6), 1 - 1e-6)
+        return math.log(p / (1.0 - p))
+    raise ValueError(f"{threshold_file} has neither 'cut' nor 'threshold'")
+
 
 @dataclass
 class Run:
@@ -141,6 +295,13 @@ class Run:
     weights: Path | None = None
     per_image: Path | None = None
     cached: dict | None = None
+    # PROVENANCE. Which of the search roots answered, which on-disk layout it
+    # used, and where the threshold came from. Recorded because the failure this
+    # study actually hit was not "checkpoint missing" -- it was "a different
+    # checkpoint answered and nothing said so".
+    source_root: Path | None = None
+    layout: str | None = None
+    threshold_file: Path | None = None
     tier: str = MISSING
     note: str = ""
 
@@ -173,7 +334,8 @@ class Registry:
     """
 
     def __init__(self, env, allow_training: bool = False, force: tuple = (),
-                 efficient_seeds: tuple = (0, 1, 2), rgkd_seeds: tuple | None = None):
+                 efficient_seeds: tuple = (0, 1, 2), rgkd_seeds: tuple | None = None,
+                 yolo_l_seeds: tuple | None = None):
         """
         Parameters
         ----------
@@ -204,6 +366,13 @@ class Registry:
         self.force = set(force)
         self.efficient_seeds = tuple(efficient_seeds)
         self.rgkd_seeds = tuple(efficient_seeds if rgkd_seeds is None else rgkd_seeds)
+        # Stage Y defaults to ONE seed, not three -- the only default in this
+        # class that does. A yolo26l run is ~3.5 h against a mobile arm's ~0.5 h,
+        # so the three-seed habit that costs 1.5 GPU-hours in Stage E costs 21
+        # here. One seed answers the question Stage Y is asked ("does capacity
+        # fix yolo26n's miss rate?"); three are needed only once the answer is
+        # yes and you want to quote a spread for it.
+        self.yolo_l_seeds = tuple((0,) if yolo_l_seeds is None else yolo_l_seeds)
         self.runs: dict[str, Run] = {}
 
     # ── scanning ─────────────────────────────────────────────────────────────
@@ -215,6 +384,8 @@ class Registry:
         self._scan_stage_c()
         self._scan_stage_e()
         self._scan_stage_h()
+        self._scan_stage_y()
+        self._scan_teachers()
         for r in self.runs.values():
             if r.run_id in self.force:
                 r.tier = MISSING
@@ -223,6 +394,20 @@ class Registry:
 
     def _add(self, r: Run) -> None:
         self.runs[r.run_id] = r
+
+    @staticmethod
+    def _attach(r: Run, hit) -> Path | None:
+        """Record which root and layout answered, and return the weights path.
+
+        Every scan goes through here so provenance cannot be forgotten in one
+        branch and remembered in the others -- which is how a search path stops
+        being an improvement and becomes a second way to substitute silently.
+        """
+        if hit is None:
+            return None
+        w, tf, root, layout, _rd = hit
+        r.source_root, r.layout, r.threshold_file = root, layout, tf
+        return w
 
     def _resolve(self, r: Run, weights: Path | None,
                  per_image: Path | None, cached: dict | None) -> Run:
@@ -257,27 +442,29 @@ class Registry:
         for family in ("segformer_b2_teacher", "segformer_b0_direct", "segformer_b0_distilled"):
             for seed in (0, 1, 2):
                 rid = f"{family}__seed{seed}"
-                shipped = self.env.ckpt / "final" / rid
-                fresh = self.env.runs / rid
-                w = None
-                for rd in (fresh, shipped):
-                    if (rd / "best.pt").exists() and (rd / "operating_point.json").exists():
-                        w = rd / "best.pt"
-                        break
-                self._resolve(Run(rid, "A", family, seed, "segformer"),
-                              w, self._best_seed_csv(family, best), self._row(seg_seed, rid))
+                r = Run(rid, "A", family, seed, "segformer")
+                # Searches EVERY root, not just runs/ and checkpoints/final/.
+                # Restricted to the seeded standard layout on purpose: the
+                # teacher store holds a seedless `segformer_b2_teacher/`, and
+                # serving that where `__seed1` was asked for would substitute a
+                # different checkpoint of the same family without saying so.
+                hit = find_checkpoint(self.env.run_roots, family, seed=seed,
+                                      layouts=("standard",))
+                w = self._attach(r, hit)
+                self._resolve(r, w, self._best_seed_csv(family, best),
+                              self._row(seg_seed, rid))
 
         for family in ("yolo_sem_direct", "yolo_sem_distilled"):
             for seed in (0, 1, 2):
                 rid = f"{family}__seed{seed}"
-                native = ("ultralytics_runs", "train", "weights", "best.pt")
-                w = _first_existing(self.env.runs.joinpath(rid, *native),
-                                    self.env.ckpt.joinpath("final", rid, *native))
+                r = Run(rid, "A", family, seed, "yolo")
+                hit = find_checkpoint(self.env.run_roots, family, seed=seed,
+                                      layouts=("yolo",))
+                w = self._attach(r, hit)
                 pi = _first_existing(
                     self.env.ckpt / "final" / rid / "test_per_image_native_argmax.csv")
                 cached = self._row(yolo_seed, rid, where={"path": "native_argmax"})
-                self._resolve(Run(rid, "A", family, seed, "yolo"), w,
-                              pi or self._best_seed_csv(family, best), cached)
+                self._resolve(r, w, pi or self._best_seed_csv(family, best), cached)
 
     def _scan_stage_b(self) -> None:
         """Stage B: the direct baselines.
@@ -290,15 +477,13 @@ class Registry:
         for family in ("unet_r50", "deeplabv3plus_r50"):
             for seed in (0, 1, 2):
                 rid = f"{family}__seed{seed}"
-                shipped = self.env.ckpt / "baselines" / rid
-                fresh = self.env.runs / rid
-                w = None
-                for rd in (fresh, shipped):
-                    if (rd / "best.pt").exists() and (rd / "operating_point.json").exists():
-                        w = rd / "best.pt"
-                        break
-                pi = _first_existing(fresh / "test_per_image.csv", shipped / "test_per_image.csv")
-                self._resolve(Run(rid, "B", family, seed, "smp"), w, pi, self._row(per_seed, rid))
+                r = Run(rid, "B", family, seed, "smp")
+                hit = find_checkpoint(self.env.run_roots, family, seed=seed,
+                                      layouts=("standard",))
+                w = self._attach(r, hit)
+                pi = _first_existing(self.env.runs / rid / "test_per_image.csv",
+                                     self.env.ckpt / "baselines" / rid / "test_per_image.csv")
+                self._resolve(r, w, pi, self._row(per_seed, rid))
 
         nn = self.env.ckpt / "baselines" / "nnunet"
         w = _first_existing(*(nn.rglob("checkpoint_final.pth")))
@@ -318,8 +503,9 @@ class Registry:
         tdir = self.env.ckpt / "distill" / "teachers"
         for name in ("segformer_b5_teacher", "segformer_b2_teacher", "segformer_b0_distilled"):
             d = tdir / name
-            self._resolve(Run(f"teacher::{name}", "C", name, None, "kd"),
-                          _first_existing(d / "best_model.pt"),
+            r = Run(f"teacher::{name}", "C", name, None, "kd")
+            r.source_root, r.layout = tdir, "teacher"
+            self._resolve(r, _first_existing(d / "best_model.pt"),
                           _first_existing(d / "test_per_image.csv"), None)
 
         adir = self.env.ckpt / "distill" / "distill_out"
@@ -330,6 +516,7 @@ class Registry:
                 w = _first_existing(d / "best_model.pt") if done else None
                 pi = _first_existing(d / "test_per_image.csv") if done else None
                 r = Run(f"arm::{d.name}", "C", "distill_arm", None, "kd")
+                r.source_root, r.layout = adir, "distill_out"
                 self._resolve(r, w, pi, None)
                 if not done:
                     r.tier = MISSING
@@ -344,8 +531,9 @@ class Registry:
         rdir = self.env.results / "distill" / "segformer_b5" / "runs"
         if rdir.exists():
             for d in sorted(p for p in rdir.iterdir() if p.is_dir()):
-                self._resolve(Run(f"b5::{d.name}", "C", "segformer_b5", None, "kd"),
-                              _first_existing(d / "best_model.pt"),
+                r = Run(f"b5::{d.name}", "C", "segformer_b5", None, "kd")
+                r.source_root, r.layout = rdir, "b5_seed_sweep"
+                self._resolve(r, _first_existing(d / "best_model.pt"),
                               _first_existing(d / "test_per_image.csv"), None)
 
     def _scan_stage_e(self) -> None:
@@ -362,17 +550,70 @@ class Registry:
         for family in EFFICIENT_FAMILIES:
             for seed in self.efficient_seeds:
                 rid = f"{family}__seed{seed}"
-                shipped = self.env.ckpt / "efficient" / rid
-                fresh = self.env.runs / rid
-                w = None
-                for rd in (fresh, shipped):
-                    if (rd / "best.pt").exists() and (rd / "operating_point.json").exists():
-                        w = rd / "best.pt"
-                        break
-                pi = _first_existing(fresh / "test_per_image.csv",
-                                     shipped / "test_per_image.csv")
-                self._resolve(Run(rid, "E", family, seed, "efficient"),
-                              w, pi, self._row(per_seed, rid))
+                r = Run(rid, "E", family, seed, "efficient")
+                hit = find_checkpoint(self.env.run_roots, family, seed=seed,
+                                      layouts=("standard",))
+                w = self._attach(r, hit)
+                pi = _first_existing(self.env.runs / rid / "test_per_image.csv",
+                                     self.env.ckpt / "efficient" / rid / "test_per_image.csv")
+                self._resolve(r, w, pi, self._row(per_seed, rid))
+
+    def _scan_teachers(self) -> None:
+        """Stage T: the teacher store -- B2, B5 and the distilled B0 reference.
+
+        These are SEEDLESS by design. Each is a single val-selected checkpoint,
+        not a 3-seed family: B5's `seed_selection.csv` picked seed 123 out of
+        {42, 123, ...}, which is why asking for `__seed0` finds nothing and why
+        this study has never once been able to use B5 as a teacher despite having
+        had it on disk the whole time.
+
+        Registered as stage "T" and never trained here -- `train_missing` only
+        acts on stages A/B/E/H/Y, so a teacher reported MISSING is a statement
+        about the bundle, not a job that is about to start.
+
+        `segformer_b5_teacher` is the one to notice. B2 is the ONLY model in this
+        study with a statistically detectable skin-tone disparity (Kruskal
+        p=0.011, gap 0.112); B5 has gap 0.070 at p=0.220 and beats B2 on every
+        ITA group, by +0.057 on Tan (IV) and +0.027 on Dark (VI). Every Stage H
+        arm currently distills from B2.
+        """
+        for family in TEACHER_FAMILIES:
+            hit = find_checkpoint(self.env.run_roots, family, seed=None,
+                                  layouts=("teacher", "standard"))
+            r = Run(family, "T", family, None, "segformer")
+            if hit:
+                w, tf, root, layout, rd = hit
+                r.source_root, r.layout, r.threshold_file = root, layout, tf
+                self._resolve(r, w, _first_existing(rd / "test_per_image.csv"), None)
+            else:
+                self._resolve(r, None, None, None)
+
+    def _scan_stage_y(self) -> None:
+        """Stage Y: YOLO26-large, native Ultralytics, native-argmax scoring.
+
+        Structurally the simplest scan in the class, and deliberately so. A YOLO
+        run is usable on its weights alone -- argmax is parameter-free, so unlike
+        every logit-thresholded family there is no `operating_point.json` that
+        could be missing and no val-fitted cut whose absence would make the test
+        score undefined.
+
+        Nothing is shipped: the stage is new, so every run starts MISSING and the
+        plan reports it with its cost rather than omitting it.
+        """
+        per_seed = self._load_csv(self.env.results / "yolo_l" / "yolo_l_test_per_seed.csv")
+        native = ("ultralytics_runs", "train", "weights", "best.pt")
+        for family in STAGE_Y_FAMILIES:
+            for seed in self.yolo_l_seeds:
+                rid = f"{family}__seed{seed}"
+                fresh, shipped = self.env.runs / rid, self.env.ckpt / "yolo_l" / rid
+                r = Run(rid, "Y", family, seed, "yolo")
+                hit = find_checkpoint(self.env.run_roots, family, seed=seed,
+                                      layouts=("yolo",))
+                w = self._attach(r, hit)
+                pi = _first_existing(fresh / "test_per_image_native_argmax.csv",
+                                     shipped / "test_per_image_native_argmax.csv")
+                self._resolve(r, w, pi,
+                              self._row(per_seed, rid, where={"path": "native_argmax"}))
 
     def _scan_stage_h(self) -> None:
         """Stage H: reliability-gated KD and the SegFormer-B2 teacher axis.
@@ -399,20 +640,19 @@ class Registry:
                 rid = f"{family}__seed{seed}"
                 fresh = self.env.runs / rid
                 shipped = self.env.ckpt / "rgkd" / rid
+                r = Run(rid, "H", family, seed, kind)
                 if kind == "yolo":
-                    w = _first_existing(fresh.joinpath(*native), shipped.joinpath(*native))
+                    hit = find_checkpoint(self.env.run_roots, family, seed=seed,
+                                          layouts=("yolo",))
                     pi = _first_existing(fresh / "test_per_image_native_argmax.csv",
                                          shipped / "test_per_image_native_argmax.csv")
                 else:
-                    w = None
-                    for rd in (fresh, shipped):
-                        if (rd / "best.pt").exists() and (rd / "operating_point.json").exists():
-                            w = rd / "best.pt"
-                            break
+                    hit = find_checkpoint(self.env.run_roots, family, seed=seed,
+                                          layouts=("standard",))
                     pi = _first_existing(fresh / "test_per_image.csv",
                                          shipped / "test_per_image.csv")
-                self._resolve(Run(rid, "H", family, seed, kind), w, pi,
-                              self._row(per_seed, rid))
+                w = self._attach(r, hit)
+                self._resolve(r, w, pi, self._row(per_seed, rid))
 
     # ── small CSV helpers ────────────────────────────────────────────────────
     @staticmethod

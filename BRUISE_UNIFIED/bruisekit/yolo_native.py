@@ -91,6 +91,39 @@ def write_data_yaml(out_dir: Path, run_dir: Path) -> Path:
     return p
 
 
+def pretrained_for(family: str, paths: dict) -> str:
+    """Which pretrained backbone a YOLO family starts from.
+
+    One function rather than a conditional at each call site, because getting it
+    wrong is silent: `YOLO("yolo26n-sem.pt")` builds and trains perfectly well
+    under a run named `yolo_sem_l_direct`, produces a `best.pt`, scores, and
+    lands in a table as the LARGE arm. Nothing raises. The only symptom is a
+    28 M-parameter row reporting 1.6 M parameters, in a study whose entire Stage
+    Y question is whether capacity fixes the miss rate.
+
+    Nano is the default so that every pre-existing family keeps the exact weights
+    it already trained with -- adding Stage Y must not perturb Stage A.
+    """
+    key = "yolo_l" if _is_large(family) else "yolo"
+    p = paths[key]
+    if not Path(p).exists():
+        raise FileNotFoundError(
+            f"{family} needs {Path(p).name}, which is not in pretrained_weights/.\n"
+            f"  Fetch it once with:\n"
+            f"    from ultralytics import YOLO; YOLO('{Path(p).name}')\n"
+            f"  then move the downloaded file to {Path(p).parent}")
+    return p
+
+
+def _is_large(family: str) -> bool:
+    """`yolo_sem_l_direct` / `yolo_sem_l_distilled` are large; everything else nano.
+
+    Matched on the `_l_` infix rather than a substring like "l", which would also
+    match `yolo_sem_distilled`.
+    """
+    return "_l_" in family or family.endswith("_l")
+
+
 def train_native(weights_path: str, data_yaml: Path, run_dir: Path, cfg: dict, seed: int) -> Path:
     """Native Ultralytics training. Skips if best.pt exists; resumes from last.pt if
     interrupted (Ultralytics writes last.pt every epoch, so a disconnect costs <=1 epoch)."""

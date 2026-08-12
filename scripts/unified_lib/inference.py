@@ -60,6 +60,7 @@ in the same table as a GPU row.
 from __future__ import annotations
 
 import gc
+import re
 import time
 from pathlib import Path
 
@@ -272,6 +273,90 @@ def _benchmark_cpu(forward, images, repeats: int, warmup: int) -> dict:
 
 
 @torch.no_grad()
+def _benchmark_logit_amp(model, images, device, cut: float, repeats: int, warmup: int) -> dict:
+    """`evaluate.benchmark_speed` with the forward under autocast. NOT the published path.
+
+    WHY THIS EXISTS AT ALL
+    -----------------------
+    A 51-run sweep timed segformer_b0 at 8.74 ms on a Colab A100 on the same day
+    `benchmark_speed` timed it at 16.55 ms on a Colab A100. Same architecture,
+    same parameter count to seven digits, 1.89x apart. No machine explains that,
+    so the difference is in the measurement, and the largest candidate difference
+    is precision: `benchmark_speed` has no autocast anywhere in it, so the
+    published table is pure fp32, while every other forward in this codebase
+    (`evaluate.evaluate_at_cut`, `sweep.cache_logits`, all of `engine`) runs under
+    `torch.amp.autocast`. On an A100 that is roughly a 2x swing for a transformer
+    and much less for a depthwise-conv mobile net -- which is the shape of the
+    discrepancy.
+
+    That was a hypothesis with no way to test it, because there was no fp16 path
+    to compare against on one machine. This is that path. Run both on the same
+    GPU in the same session and the question is answered by measurement rather
+    than by argument.
+
+    A SEPARATE FUNCTION, NOT A FLAG ON THE PUBLISHED ONE
+    ------------------------------------------------------
+    `evaluate.benchmark_speed` produces the five shipped rows and is written out
+    verbatim by the notebook's `%%writefile` cell. Adding a branch inside it would
+    put the published number one default-argument change away from silently
+    becoming a different number. So this mirrors it exactly -- per-image batches,
+    double synchronisation, same repeats and warmup, threshold inside the timed
+    region -- and differs in one line, the autocast. The row it produces carries
+    `precision == "fp16_autocast"` so it can never be read as a published number.
+
+    The threshold is applied to the fp32-cast logit: comparing a fp16 logit to a
+    fp32 cut is a different operation, and this function exists to isolate the
+    effect of precision on SPEED, not to introduce a second difference.
+    """
+    model.eval()
+    for _ in range(warmup):
+        with torch.amp.autocast("cuda", enabled=True):
+            _ = model(images[:1])
+    torch.cuda.synchronize()
+
+    times = []
+    for _ in range(repeats):
+        for i in range(len(images)):
+            x = images[i:i + 1]
+            torch.cuda.synchronize()
+            t0 = time.perf_counter()
+            with torch.amp.autocast("cuda", enabled=True):
+                z = model(x)
+            _ = z.float() >= cut
+            torch.cuda.synchronize()
+            times.append((time.perf_counter() - t0) * 1000)
+
+    arr = np.array(times)
+    return {"median_ms": float(np.median(arr)), "mean_ms": float(arr.mean()),
+            "p95_ms": float(np.percentile(arr, 95)), "fps": float(1000.0 / np.median(arr)),
+            "n_timed": len(arr)}
+
+
+@torch.no_grad()
+def _benchmark_yolo_amp(model, images, repeats: int, warmup: int) -> dict:
+    """`_benchmark_yolo_cuda` under autocast. Raw forward only, same reasoning as above."""
+    model.eval()
+    for _ in range(warmup):
+        with torch.amp.autocast("cuda", enabled=True):
+            _ = model(images[:1])
+    torch.cuda.synchronize()
+    times = []
+    for _ in range(repeats):
+        for i in range(len(images)):
+            x = images[i:i + 1]
+            torch.cuda.synchronize()
+            t0 = time.perf_counter()
+            with torch.amp.autocast("cuda", enabled=True):
+                _ = model(x)
+            torch.cuda.synchronize()
+            times.append((time.perf_counter() - t0) * 1000)
+    arr = np.array(times)
+    return {"median_ms": float(np.median(arr)), "mean_ms": float(arr.mean()),
+            "p95_ms": float(np.percentile(arr, 95)), "fps": float(1000.0 / np.median(arr)),
+            "n_timed": len(arr)}
+
+
+@torch.no_grad()
 def _benchmark_yolo_cuda(model, images, repeats: int, warmup: int) -> dict:
     """Raw forward only, timed exactly as `evaluate.benchmark_speed` times SegFormer.
 
@@ -302,7 +387,8 @@ def _benchmark_yolo_cuda(model, images, repeats: int, warmup: int) -> dict:
 
 def speed_table(env, reg, cfg, man640, models=DEFAULT_MODELS,
                 repeats: int = BENCH_REPEATS, warmup: int = BENCH_WARMUP,
-                n_images: int | None = None, seed: int = BENCH_SEED) -> pd.DataFrame:
+                n_images: int | None = None, seed: int = BENCH_SEED,
+                precision: str = "fp32") -> pd.DataFrame:
     """Time 640-tensor-on-device -> mask-on-device for each model. One machine, one table.
 
     Columns match `results/final/benchmark_640.csv` -- median_ms, mean_ms, p95_ms,
@@ -314,12 +400,37 @@ def speed_table(env, reg, cfg, man640, models=DEFAULT_MODELS,
     Every model is timed at `seed` (0 by default), including models whose
     val-selected best seed is not 0: speed is a property of the architecture, and
     mixing seeds here would put per-seed noise into a column that has none.
+
+    `precision`
+    -----------
+    "fp32" is the published recipe and the default: `evaluate.benchmark_speed`
+    contains no autocast, so the five shipped rows are full precision. "fp16"
+    runs the mirrored autocast path instead, for the one purpose of measuring how
+    much of a cross-table gap is precision rather than hardware. The two are not
+    one table -- `precision` is a column, and `check_single_machine` refuses to
+    write a file that mixes them.
+
+    MEMORY COLUMNS
+    --------------
+    `peak_activation_MB` is kept because it is what the shipped CSV calls its
+    memory column, but it is NOT activation memory: `reset_peak_memory_stats`
+    seeds the peak at whatever is already resident, and all 185 test images are
+    staged on the device before the loop starts -- 185x3x640x640x4 B = 909 MB
+    that every row was silently carrying. That is why all four Stage E mobile
+    nets report ~1000 MB regardless of size. `peak_incremental_MB` subtracts the
+    staged tensor and is the number that means what the old column's name claimed.
     """
+    from bruisekit import gpustate as G
     from bruisekit import loaders as L
     from bruisekit.evaluate import benchmark_speed
     from bruisekit.models import count_params
 
+    if precision not in ("fp32", "fp16"):
+        raise ValueError(f"precision must be 'fp32' or 'fp16', got {precision!r}")
+
     on_cuda = str(env.device).startswith("cuda")
+    if precision == "fp16" and not on_cuda:
+        raise ValueError("precision='fp16' needs CUDA; autocast on CPU is a different thing")
     if n_images is None:
         n_images = None if on_cuda else CPU_BENCH_IMAGES
     if not on_cuda:
@@ -330,44 +441,133 @@ def speed_table(env, reg, cfg, man640, models=DEFAULT_MODELS,
     if not runs:
         return pd.DataFrame()
 
+    # Static GPU configuration, read once: it cannot change mid-table, and every
+    # row needs it because a latency without a clock state is not reproducible.
+    state = G.probe() if on_cuda else {"gpustate_error": "not a cuda device"}
+    if on_cuda:
+        print(G.describe(state))
+
+    # ── PROCESS HYGIENE ──────────────────────────────────────────────────────
+    # THE MOST EXPENSIVE BUG THIS FILE HAS SEEN, so it gets a column of its own.
+    #
+    # `results/final/benchmark_640.csv` reported SegFormer-B0 at 16.55 ms / 60
+    # FPS. Measured twice, three weeks apart, agreeing to 0.8% -- which read as
+    # reproducibility and was trusted for weeks. Re-run in a FRESH kernel, the
+    # same cell of the same notebook on the same A100 gave 9.45 ms / 106 FPS.
+    # Same code, same weights, same GPU, same torch, same transformers, same
+    # TF32 flags. 1.75x.
+    #
+    # The difference was that the original runs executed the whole notebook
+    # first. Something in the training/evaluation sections leaves the process in
+    # a state that costs the transformers ~1.72x and the convolutional models
+    # nothing measurable (YOLO moved 1.3%). Consistent with GEMM/attention
+    # kernels losing a fast path while cuDNN convolutions keep theirs; not yet
+    # bisected to a specific call.
+    #
+    # Rather than assert a mechanism we have not proven, record the one fact that
+    # distinguishes the two cases and is cheap to obtain: had this process
+    # already put anything on the GPU before the benchmark started? A fresh
+    # process reports 0. Anything else means the row is not comparable to a
+    # fresh-process row, whatever the cause turns out to be.
+    prior_peak_mb = torch.cuda.max_memory_allocated(env.device) / 1e6 if on_cuda else 0.0
+    fresh_process = prior_peak_mb == 0.0
+    if on_cuda and not fresh_process:
+        print(f"  WARNING  this process already peaked at {prior_peak_mb:.0f} MB of CUDA "
+              f"memory before the benchmark started, so it is NOT a fresh process.\n"
+              f"           A SegFormer timed this way came out 1.75x slow the last time "
+              f"it mattered, and looked perfectly reproducible while doing so.\n"
+              f"           Restart the kernel and run only this benchmark if the number "
+              f"is going to be published.")
+    state_cols = {k: v for k, v in state.items() if k != "gpu_name"}
+    state_cols["clock_headroom"] = G.clock_headroom(state) if on_cuda else None
+
     images = stage_images(env, cfg, man640, n_images)
-    rows = []
+    staged_mb = images.element_size() * images.nelement() / 1e6
+    rows, failed = [], []
     for family, run in runs.items():
         if on_cuda:
             torch.cuda.reset_peak_memory_stats(env.device)
+            base_mb = torch.cuda.memory_allocated(env.device) / 1e6
 
-        if run.kind in _LOGIT_KINDS:
-            model, cut = L.load_model(env, run)
-            if on_cuda:
-                b = benchmark_speed(model, images, env.device, cut, repeats, warmup)
+        # ONE BAD CHECKPOINT MUST NOT DISCARD THE MODELS ALREADY TIMED.
+        # A sweep over a dozen families is tens of minutes of GPU time, and a
+        # state_dict key mismatch in the eleventh (`load_state_dict` raises
+        # RuntimeError) used to throw away the ten that had already succeeded --
+        # the numbers were printed to stdout and then lost with the exception,
+        # because nothing was written until the whole loop finished. A model that
+        # cannot be loaded is a fact about that checkpoint, not a reason to stop
+        # measuring the others. It is reported loudly, listed again at the end,
+        # and left out of the table rather than guessed at.
+        model = None
+        try:
+            if run.kind in _LOGIT_KINDS:
+                model, cut = L.load_model(env, run)
+                if not on_cuda:
+                    b = _benchmark_cpu(lambda x: model(x) >= cut, images, repeats, warmup)
+                elif precision == "fp16":
+                    with G.ClockSampler() as cs:
+                        b = _benchmark_logit_amp(model, images, env.device, cut, repeats, warmup)
+                else:
+                    with G.ClockSampler() as cs:
+                        b = benchmark_speed(model, images, env.device, cut, repeats, warmup)
+                b["path"] = PATH_LOGIT
+                b["params_M"] = count_params(model) / 1e6
+            elif run.kind == "yolo":
+                import bruisekit.yolo_native as yn
+                model = yn._raw_module(run.weights, env.device)
+                if not on_cuda:
+                    b = _benchmark_cpu(model, images, repeats, warmup)
+                elif precision == "fp16":
+                    with G.ClockSampler() as cs:
+                        b = _benchmark_yolo_amp(model, images, repeats, warmup)
+                else:
+                    with G.ClockSampler() as cs:
+                        b = _benchmark_yolo_cuda(model, images, repeats, warmup)
+                b["path"] = PATH_YOLO
+                b["params_M"] = sum(p.numel() for p in model.parameters()) / 1e6
             else:
-                b = _benchmark_cpu(lambda x: model(x) >= cut, images, repeats, warmup)
-            b["path"] = PATH_LOGIT
-            b["params_M"] = count_params(model) / 1e6
-        elif run.kind == "yolo":
-            import bruisekit.yolo_native as yn
-            model = yn._raw_module(run.weights, env.device)
+                print(f"  SKIP  {family:<32} no timing path for kind={run.kind!r}")
+                continue
+        except Exception as e:                       # noqa: BLE001 -- see above
+            # The message is truncated because a state_dict mismatch prints every
+            # differing key and can run to hundreds of lines, which buries the
+            # rest of the sweep. The full text is re-raisable with load_model.
+            msg = " ".join(str(e).split())
+            failed.append((family, run.run_id, type(e).__name__, msg))
+            print(f"  FAIL  {family:<32} {type(e).__name__}: {msg[:120]}"
+                  f"{'...' if len(msg) > 120 else ''}")
+            del model
+            model = None
+            gc.collect()
             if on_cuda:
-                b = _benchmark_yolo_cuda(model, images, repeats, warmup)
-            else:
-                b = _benchmark_cpu(model, images, repeats, warmup)
-            b["path"] = PATH_YOLO
-            b["params_M"] = sum(p.numel() for p in model.parameters()) / 1e6
-        else:
-            print(f"  SKIP  {family:<32} no timing path for kind={run.kind!r}")
+                torch.cuda.empty_cache()
             continue
 
+        peak_mb = torch.cuda.max_memory_allocated(env.device) / 1e6 if on_cuda else float("nan")
         b.update({
             "model": family, "kind": run.kind, "run_id": run.run_id,
-            "peak_activation_MB": (torch.cuda.max_memory_allocated(env.device) / 1e6
-                                   if on_cuda else float("nan")),
+            "precision": precision,
+            "peak_activation_MB": peak_mb,
+            "peak_incremental_MB": (peak_mb - base_mb) if on_cuda else float("nan"),
+            "staged_images_MB": staged_mb,
             "device": "cuda" if on_cuda else str(env.device),
             "device_name": _device_name(env.device),
             "repeats": repeats, "warmup": warmup, "seed": seed,
+            "fresh_process": fresh_process,
+            "process_prior_peak_MB": prior_peak_mb,
         })
+        b.update(cs.summary() if on_cuda else
+                 {"sm_clock_under_load_median_mhz": None, "sm_clock_under_load_max_mhz": None,
+                  "sm_clock_under_load_min_mhz": None, "sm_clock_samples": 0})
+        b.update(state_cols)
         rows.append(b)
         print(f"  {family:<32} {b['median_ms']:7.2f} ms  {b['fps']:7.1f} FPS  "
-              f"p95={b['p95_ms']:6.2f} ms  {b['params_M']:.2f} M  [{b['path']}]")
+              f"p95={b['p95_ms']:6.2f} ms  {b['params_M']:.2f} M  "
+              f"[{b['path']}/{precision}]")
+        if on_cuda:
+            warn = G.sampler_warning(cs.summary(), state)
+            if warn:
+                print(warn)
 
         del model
         gc.collect()
@@ -379,9 +579,21 @@ def speed_table(env, reg, cfg, man640, models=DEFAULT_MODELS,
     if on_cuda:
         torch.cuda.empty_cache()
 
+    if failed:
+        print(f"\n  {len(failed)} model(s) could not be timed and are ABSENT from this "
+              f"table -- it is not a complete sweep:")
+        for family, run_id, exc, msg in failed:
+            print(f"    {family:<32} ({run_id})\n      {exc}: {msg[:200]}"
+                  f"{'...' if len(msg) > 200 else ''}")
+        print("  Reproduce one with:  bruisekit.loaders.load_model(env, reg.get(RUN_ID))")
+
     cols = ["median_ms", "mean_ms", "p95_ms", "fps", "n_timed", "model", "path",
-            "params_M", "peak_activation_MB", "kind", "run_id", "device",
-            "device_name", "repeats", "warmup", "seed"]
+            "params_M", "peak_activation_MB", "peak_incremental_MB", "staged_images_MB",
+            "kind", "run_id", "device", "device_name", "precision",
+            "fresh_process", "process_prior_peak_MB", "repeats", "warmup", "seed",
+            "sm_clock_under_load_median_mhz", "sm_clock_under_load_max_mhz",
+            "sm_clock_under_load_min_mhz", "sm_clock_samples"]
+    cols += [c for c in state_cols if c not in cols]
     return pd.DataFrame(rows)[cols]
 
 
@@ -399,6 +611,18 @@ def check_single_machine(df: pd.DataFrame) -> pd.DataFrame:
         raise ValueError(
             "speed table mixes devices and is therefore not a table: "
             f"{names}. Time every model on one machine, or keep the CSVs separate.")
+
+    # Precision is the second way a table stops being a table, and it is the one
+    # that actually bit: a fp32 row and a fp16 row of the same model differ by
+    # about 2x on an A100, which reads exactly like a hardware difference and was
+    # attributed to one for a week. Same rule as devices -- separate files.
+    if "precision" in df.columns:
+        precisions = sorted(set(df["precision"]))
+        if len(precisions) > 1:
+            raise ValueError(
+                "speed table mixes precisions and is therefore not a table: "
+                f"{precisions}. A fp16 row is ~2x a fp32 row on the same GPU; put them "
+                "in separate CSVs and compare them deliberately.")
     return df
 
 
@@ -407,7 +631,8 @@ def run(env, reg, cfg, man, man640, models=DEFAULT_MODELS, *,
         do_inference: bool = True, do_speed: bool = True, do_reconcile: bool = True,
         seed: int | None = None, repeats: int = BENCH_REPEATS,
         warmup: int = BENCH_WARMUP, n_images: int | None = None,
-        out_dir: Path | None = None) -> dict:
+        out_dir: Path | None = None, precision: str = "fp32",
+        machine_tag: str | None = None) -> dict:
     """Both halves of §18.1, written to `out_dir` (default `env.out/inference`).
 
     Returns {"per_image": {family: df}, "summary": df, "speed": df,
@@ -438,14 +663,22 @@ def run(env, reg, cfg, man, man640, models=DEFAULT_MODELS, *,
             print(rec.to_string(index=False))
 
     if do_speed:
-        print(f"\nSPEED BENCHMARK -- {repeats} repeats, {warmup} warmup, seed {BENCH_SEED}")
+        print(f"\nSPEED BENCHMARK -- {repeats} repeats, {warmup} warmup, seed {BENCH_SEED}, "
+              f"precision {precision}")
         sp = check_single_machine(
-            speed_table(env, reg, cfg, man640, models, repeats, warmup, n_images))
+            speed_table(env, reg, cfg, man640, models, repeats, warmup, n_images,
+                        precision=precision))
         if not sp.empty:
-            # Named for the device so a CPU smoke-test can never be mistaken for,
-            # or silently overwrite, the GPU table it is not comparable to.
+            # Named for the device AND the precision AND the machine, so that no
+            # two runs that are not comparable can ever land on the same path.
+            # The three tables published before this existed all wrote to one
+            # filename and had to be told apart by memory.
             tag = "cuda" if str(env.device).startswith("cuda") else "cpu"
-            sp.to_csv(out / f"benchmark_640_{tag}.csv", index=False)
+            stem = f"benchmark_640_{tag}_{precision}"
+            if machine_tag:
+                stem += f"_{re.sub(r'[^A-Za-z0-9._-]+', '-', machine_tag)}"
+            sp.to_csv(out / f"{stem}.csv", index=False)
+            print(f"  -> {stem}.csv")
         result["speed"] = sp
 
     print(f"\nwrote {out}")
@@ -487,6 +720,12 @@ def main(argv=None) -> int:
     p.add_argument("--no-reconcile", action="store_true",
                    help="skip the fresh-vs-shipped comparison")
     p.add_argument("--out", default=None, help="output dir (default: <work>/outputs/inference)")
+    p.add_argument("--precision", choices=("fp32", "fp16"), default="fp32",
+                   help="fp32 is the published recipe. fp16 runs the autocast path, for "
+                        "measuring how much of a cross-table gap is precision (default: fp32)")
+    p.add_argument("--machine-tag", default=None,
+                   help='short name for this host, e.g. "orc-mig" or "colab-a100". Goes in '
+                        "the output filename so two machines' tables cannot collide.")
     a = p.parse_args(argv)
 
     from bruisekit import loaders as L
@@ -508,7 +747,8 @@ def main(argv=None) -> int:
     run(env, reg, DEFAULT_CFG, man, man640, tuple(a.models),
         do_inference=not a.no_inference, do_speed=not a.no_speed,
         do_reconcile=not a.no_reconcile, seed=a.seed, repeats=a.repeats,
-        warmup=a.warmup, n_images=a.bench_images, out_dir=a.out)
+        warmup=a.warmup, n_images=a.bench_images, out_dir=a.out,
+        precision=a.precision, machine_tag=a.machine_tag)
     return 0
 
 

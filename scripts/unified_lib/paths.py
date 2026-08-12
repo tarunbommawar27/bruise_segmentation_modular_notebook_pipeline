@@ -171,6 +171,11 @@ class Env:
     work: Path
     device: object
     colab: bool = False
+    # Extra directories holding `<family>__seed<N>/` run folders -- typically a
+    # scratch tree from another machine. Searched after `runs` and before the
+    # bundle's shipped checkpoints, so your own training always wins over a
+    # shipped copy but a shipped copy still answers when you have not trained it.
+    extra_runs: tuple = ()
     _made: list = field(default_factory=list, repr=False)
 
     # ── read-only bundle locations ───────────────────────────────────────────
@@ -208,13 +213,61 @@ class Env:
 
     @property
     def runs(self) -> Path:
-        """Where NEW training runs are written. Never the shipped checkpoints.
+        """Where NEW training runs are WRITTEN. Never the shipped checkpoints.
 
         Kept separate from `ckpt` on purpose: a retrain must not overwrite the
-        weights that produced the shipped results. The registry looks in both,
-        preferring the shipped ones unless you explicitly force a retrain.
+        weights that produced the shipped results.
+
+        For READING, use `run_roots` -- checkpoints for this study live in at
+        least four places with three different on-disk layouts, and a single
+        directory cannot see them all.
         """
         return self.work / "runs"
+
+    @property
+    def run_roots(self) -> list[Path]:
+        """Every directory to SEARCH for a checkpoint, in priority order.
+
+        WHY A SEARCH PATH AND NOT A DIRECTORY
+        --------------------------------------
+        The study's checkpoints are not in one place and never were:
+
+            <work>/runs/                      runs trained by this session
+            <extra_runs>/                     e.g. /scratch/$USER/bruise_work/runs
+            <bundle>/checkpoints/final/       the five Stage A models, 3 seeds
+            <bundle>/checkpoints/baselines/   U-Net, DeepLabV3+, 3 seeds
+            <bundle>/checkpoints/efficient/   Stage E/F mobile arms
+            <bundle>/checkpoints/rgkd/        Stage H arms
+            <bundle>/checkpoints/distill/teachers/   B2, B5, B0-distilled
+
+        Before this existed the registry looked in exactly two -- `env.runs` and
+        one stage-specific `ckpt` subdirectory -- and fell back SILENTLY between
+        them. On 2026-08-04 that made every SegFormer load an old-lineage
+        checkpoint from the bundle because the real runs were in a scratch
+        directory nobody had pointed at, and the only symptom was a crash three
+        steps later. A model you have on disk and cannot see is worse than one
+        you do not have: the second is reported as a gap, the first is silently
+        substituted.
+
+        Order is priority: the first root holding a usable checkpoint wins, and
+        `env.runs` is first so a fresh retrain always beats a shipped copy.
+        Provenance travels with every `Run` (`source_root`), so which one
+        answered is a fact in the plan table rather than something to deduce.
+        """
+        roots = [self.runs, *self.extra_runs]
+        ck = self.ckpt
+        roots += [ck / "final", ck / "baselines", ck / "efficient", ck / "rgkd",
+                  ck / "yolo_l", ck / "distill" / "teachers"]
+        # De-duplicate while preserving order: extra_runs may legitimately name a
+        # directory that is already implied, and searching it twice would make
+        # every "which root answered?" line ambiguous.
+        seen, out = set(), []
+        for r in roots:
+            rp = Path(r).expanduser()
+            if rp not in seen:
+                seen.add(rp)
+                out.append(rp)
+        return out
 
     @property
     def out(self) -> Path:
@@ -228,6 +281,10 @@ class Env:
             "segformer_b2": str(self.weights / "segformer_mit_b2"),
             "segformer_b5": str(self.weights / "segformer_mit_b5"),
             "yolo": str(self.weights / "yolo26n-sem.pt"),
+            # Stage Y. Absent from most bundles -- it is a ~50 MB download that
+            # only a Stage Y session needs, so the path is always returned and
+            # its existence is checked where it is used, not here.
+            "yolo_l": str(self.weights / "yolo26l-sem.pt"),
         }
 
     def describe(self) -> str:
@@ -245,7 +302,8 @@ class Env:
 def setup(root: str | Path | None = None,
           work: str | Path | None = None,
           device: str | None = None,
-          mount: bool = True) -> Env:
+          mount: bool = True,
+          extra_runs: "str | Path | list | tuple | None" = None) -> Env:
     """Resolve the environment. This is the only host-aware call in the notebook.
 
     Parameters
@@ -276,7 +334,21 @@ def setup(root: str | Path | None = None,
         w = r / "_work"
     w.mkdir(parents=True, exist_ok=True)
 
-    env = Env(root=r, work=w, device=pick_device(device), colab=colab)
+    # A bare string is the overwhelmingly common case ("the other machine's
+    # scratch"), and treating it as an iterable of characters would produce a
+    # search path of single-letter directories that all silently miss.
+    if extra_runs is None:
+        extra = ()
+    elif isinstance(extra_runs, (str, Path)):
+        extra = (Path(extra_runs).expanduser().resolve(),)
+    else:
+        extra = tuple(Path(p).expanduser().resolve() for p in extra_runs)
+
+    env = Env(root=r, work=w, device=pick_device(device), colab=colab, extra_runs=extra)
+    # Only the writable ones are created. A search root that does not exist is
+    # not an error -- most bundles have no `checkpoints/rgkd/` -- and creating it
+    # would turn "you have not trained this" into an empty directory that looks
+    # like you have.
     for d in (env.cache640, env.runs, env.out):
         d.mkdir(parents=True, exist_ok=True)
     return env
