@@ -1,0 +1,49 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "bruisekit"
+version = "2.0.0"
+description = "Bruise segmentation: training pipeline, distillation stages, and fairness/size analysis"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "Proprietary — internal research use" }
+
+# Runtime dependencies are declared in requirements.txt rather than duplicated
+# here. That file is the one the notebooks, the ORC batch scripts and the Colab
+# bootstrap all read; a second copy in this table is a second thing to forget to
+# update. Install with:  pip install -r requirements.txt && pip install -e .
+dependencies = []
+
+[project.optional-dependencies]
+dev = ["pytest>=7.4"]
+
+[project.scripts]
+# The shell entry points. Each mirrors a notebook exactly and goes through the
+# same functions, so a batch run on ORC and an interactive run in Jupyter cannot
+# drift into producing different numbers.
+bruise-stage-n4 = "run_stage_n4:main"
+bruise-stage-o  = "run_stage_o:main"
+bruise-allmodels = "run_all_models:main"
+
+[tool.setuptools]
+packages = ["bruisekit", "bruisekit.kd"]
+py-modules = ["run_stage_n4", "run_stage_o", "run_all_models"]
+
+[tool.setuptools.package-data]
+bruisekit = ["*.json", "*.yaml"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# Quiet by default; the self-tests print their own per-check lines when a
+# failure needs diagnosing (-s).
+addopts = "-q --tb=short"
+filterwarnings = [
+    "ignore::UserWarning",
+    "ignore::DeprecationWarning",
+]
+markers = [
+    "gpu: needs CUDA (skipped on a laptop)",
+    "weights: needs trained checkpoints on disk",
+]
