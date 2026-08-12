@@ -145,6 +145,7 @@ these arms.
 from __future__ import annotations
 
 import json
+import time
 from pathlib import Path
 
 import numpy as np
@@ -1575,6 +1576,183 @@ def dump_loss_stats(run_dir: Path) -> dict | None:
 
 
 # ── training ─────────────────────────────────────────────────────────────────
+def record_override(env, gate: dict, reason: str, runs_dir, verbose: bool = True) -> Path:
+    """Stamp a forced run with the gate it overrode, and why.
+
+    THE POINT. `ita_group_gate` closed on both schemes. Training anyway is a
+    legitimate decision -- a measured null is a stronger paper section than a
+    predicted one, and the pre-registration was written to be falsifiable, not to
+    be obeyed. What is NOT legitimate is a results directory that looks
+    indistinguishable from a gate-approved run six months later.
+
+    So the override is written beside the runs, carrying the failing clauses
+    verbatim. Any table built from this directory can be traced back to the fact
+    that the gate said no first, which is the honest way to report it: "we ran it
+    anyway and here is what happened" reads very differently from "we ran it".
+    """
+    out = Path(runs_dir)
+    out.mkdir(parents=True, exist_ok=True)
+    rec = {
+        "forced": True,
+        "reason": reason,
+        "recorded_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "gate_scheme": gate.get("scheme"),
+        "gate_verdict": "CLOSED" if not gate.get("GATE_any") else "OPEN",
+        "failing_clauses": [k for k in ("GATE_gain_ci_clears_zero",
+                                        "GATE_projection_clears_margin",
+                                        "GATE_key_identifiable")
+                            if not gate.get(k, True)],
+        "weighting_gain_over_best_single": gate.get("weighting_gain_over_best_single"),
+        "weighting_gain_ci95": gate.get("weighting_gain_ci95"),
+        "projected_student_gain": gate.get("projected_student_gain"),
+        "n_identifiable_groups": gate.get("n_identifiable_groups"),
+        "per_image_oracle_gain": gate.get("per_image_oracle_gain"),
+        "how_to_report": (
+            "The gate closed BEFORE this ran. Report the result as a measured "
+            "null (or a measured win) obtained against a negative pre-test, and "
+            "quote the identifiability table alongside it. Do not present these "
+            "runs as gate-approved."),
+    }
+    p = out / "FORCED_GATE.json"
+    p.write_text(json.dumps(rec, indent=2))
+    if verbose:
+        print(f"  [override] gate was {rec['gate_verdict']}; failing clauses "
+              f"{rec['failing_clauses']}")
+        print(f"  [override] recorded -> {p}")
+    return p
+
+
+def preflight(env, reg, cfg: dict, man640: dict, weights: np.ndarray,
+              family: str = "segformer_b0_itakd", seed: int = 0,
+              verbose: bool = True) -> dict:
+    """Run ONE training batch through the real shims and prove the wiring.
+
+    WHY THIS EXISTS. `train_arms` is a multi-hour job whose three shims have
+    never run together against `engine.train_run`. The failures they can produce
+    are the expensive kind: a loader that is not tagged, a teacher stack with the
+    wrong K, a batch pin that does not fit. Each surfaces on the first optimizer
+    step, and each would otherwise surface after model build, cache warm and
+    teacher load -- twenty minutes in, or worse, silently.
+
+    So: build the student, install all three shims, pull ONE batch, run the
+    teacher forward, compute the loss, and check the four things that matter:
+
+      1. the loader tagged the batch          (CURRENT_GROUPS is set, right length)
+      2. the teacher returned a [B, K, H, W]  stack, K == the weight matrix
+      3. the loss is finite and has a grad path
+      4. the group vector actually reached the loss and both groups can appear
+
+    Costs one forward and one backward. Returns a dict; RAISES on anything that
+    would make the run meaningless rather than warning about it.
+    """
+    global CURRENT_GROUPS
+
+    import torch
+
+    from . import loaders as L
+    from .engine import build_model as _bm  # noqa: F401  (shim target may be patched)
+
+    register_specs()
+    W = np.asarray(weights, float)
+    spec = L.spec_for(family)
+
+    out: dict = {"family": family, "seed": seed}
+    with arm(family):
+        # The loader must be the tagging wrapper, and it must tag.
+        import bruisekit.engine as _be
+        loader = _be.make_loader(man640["train"], env.cache640, cfg["img_size"],
+                                 2, True, 0, seed)
+        if not isinstance(loader, _GroupTaggingLoader):
+            raise RuntimeError(
+                "install_group_shim did not wrap the training loader. It was "
+                "either not installed, or installed outside the arm() context, "
+                "or engine.make_loader was rebound afterwards by another shim. "
+                "Without the wrapper the loss cannot see ITA groups and would "
+                "raise on the first batch.")
+
+        x, y, stems = next(iter(loader))
+        g = CURRENT_GROUPS
+        if g is None or len(g) != x.shape[0]:
+            raise RuntimeError(
+                f"the loader did not record group indices for its own batch "
+                f"(got {None if g is None else len(g)} for B={x.shape[0]})")
+        out["batch_groups"] = np.asarray(g).tolist()
+        out["batch_stems"] = list(stems)
+
+        x = x.to(env.device)
+        y = y.to(env.device)
+
+        teacher = _be.load_teacher(Path(f"x/{family}__seed{seed}"),
+                                   env.paths_for_models(), env.device,
+                                   bool(cfg.get("amp", True)))
+        with torch.no_grad():
+            tprob = teacher(x)
+        out["teacher_stack"] = tuple(tprob.shape)
+        out["pool"] = list(getattr(teacher, "pool", []))
+        out["temperatures"] = dict(getattr(teacher, "temperature", {}))
+        if tprob.shape[1] != W.shape[1]:
+            raise RuntimeError(
+                f"teacher stack has K={tprob.shape[1]} but the fitted weights are "
+                f"for K={W.shape[1]}. The pool and the weights disagree -- refit "
+                f"the weights for this pool.")
+
+        model = _bm(spec["arch"], spec["size"], env.paths_for_models()).to(env.device)
+        crit = _be.DistillLoss(cfg.get("segformer_alpha", 0.6),
+                               cfg.get("aux_weight", 0.4))
+        if type(crit).__name__ != "GroupRoutedDistillLoss":
+            raise RuntimeError(
+                f"engine.DistillLoss returned {type(crit).__name__}, not the "
+                f"group-routed loss. install_loss_shim was not installed LAST -- "
+                f"another stage's dispatcher is on top of it.")
+
+        logits, aux = model.forward_train(x)
+        loss = crit(logits, aux, y, tprob)
+        loss.backward()
+        out["loss"] = float(loss)
+        if not np.isfinite(out["loss"]):
+            raise RuntimeError(f"preflight loss is {out['loss']}")
+        n_grad = sum(1 for p in model.parameters()
+                     if p.grad is not None and torch.isfinite(p.grad).all())
+        out["params_with_finite_grad"] = n_grad
+        if n_grad == 0:
+            raise RuntimeError("no parameter received a finite gradient")
+
+        # The group index must CHANGE the loss, or the arm is a uniform ensemble
+        # wearing this stage's name. Compare against every image forced to group 0.
+        keep = CURRENT_GROUPS
+        try:
+            CURRENT_GROUPS = np.zeros(x.shape[0], dtype=np.int64)
+            with torch.no_grad():
+                flat = float(crit(logits.detach(), None if aux is None
+                                  else aux.detach(), y, tprob))
+        finally:
+            CURRENT_GROUPS = keep
+        out["loss_all_group0"] = flat
+        out["group_index_changes_loss"] = bool(
+            len(set(out["batch_groups"])) > 1 and abs(flat - out["loss"]) > 1e-9)
+
+        stats = crit.stats()
+        out["images_per_group_seen"] = stats["images_per_group"]
+
+    if verbose:
+        print("  PREFLIGHT")
+        print(f"    loader tagged batch      groups {out['batch_groups']}")
+        print(f"    teacher stack            {out['teacher_stack']}  "
+              f"pool {out['pool']}")
+        print(f"    temperatures             "
+              f"{ {k: round(v, 4) for k, v in out['temperatures'].items()} }")
+        print(f"    loss                     {out['loss']:.6f}  "
+              f"({out['params_with_finite_grad']} tensors with finite grad)")
+        if len(set(out["batch_groups"])) > 1:
+            print(f"    group index matters      {out['group_index_changes_loss']} "
+                  f"(all-group-0 loss {out['loss_all_group0']:.6f})")
+        else:
+            print(f"    group index matters      not testable on this batch "
+                  f"(all {out['batch_groups'][0]}); it is a 2-group scheme and "
+                  f"this batch drew one group")
+    return out
+
+
 def train_arms(env, reg, cfg: dict, man640: dict, runs_dir,
                families=STAGE_O_FAMILIES, seeds=(0, 1, 2),
                max_micro: int | None = 16, verbose: bool = True) -> list[str]:

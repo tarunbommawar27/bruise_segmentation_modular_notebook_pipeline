@@ -203,3 +203,5 @@ BRUISE_UNIFIED/EXEC_STEPS.txt
 !scripts/83b_zip_stage_o.py
 !scripts/84_generate_inference_all_notebook.py
 !scripts/84b_zip_inference_all.py
+!scripts/86_generate_stage_o_train_notebook.py
+!scripts/86b_zip_stage_o_train.py
