@@ -1,0 +1,44 @@
+==============================================================================
+STAGE O -- ITA-GROUP WEIGHTING GATE   (validation only; test untouched)
+==============================================================================
+  134 val images, 20 subjects, 3 teachers, scheme='light_vs_rest' (2 groups)
+
+  teacher                    val Dice   misses
+    segformer_b5_teacher      0.7881       3
+    deeplabv3plus_r50         0.7838       2
+    medsam_ft                 0.7957       2
+    GROUP-WEIGHTED            0.7901
+    per-image oracle (bound)  0.8408       2
+
+  WEIGHTS  (softmax(beta x group mean val Dice))
+    Light          segformer_b5_teacher      0.268   (dice 0.7365, n=31, 7 subj)
+    Light          deeplabv3plus_r50         0.344   (dice 0.7679, n=31, 7 subj)
+    Light          medsam_ft                 0.389   (dice 0.7831, n=31, 7 subj)
+    Other          segformer_b5_teacher      0.350   (dice 0.8037, n=103, 19 subj)
+    Other          deeplabv3plus_r50         0.311   (dice 0.7886, n=103, 19 subj)
+    Other          medsam_ft                 0.339   (dice 0.7995, n=103, 19 subj)
+
+  IDENTIFIABILITY  -- is the per-group argmax estimable at all?
+    group            n subj  best                    margin  P(stable)
+  NO  Light           31    7  medsam_ft              +0.0153       0.69
+  NO  Other          103   19  segformer_b5_teacher   +0.0042       0.66
+
+  group-weighting gain over medsam_ft: -0.0056  CI95 [-0.0174, -0.0016]  P(>0) = 0.001
+  per-image oracle gain (UPPER BOUND, unreachable by grouping): +0.0450
+  x transfer rate 0.264 (Stage C: student +0.0068 realised from oracle +0.0258)
+  PROJECTED STUDENT GAIN -0.0015  vs margin +0.0100
+
+  [fail] weighting-gain CI clears zero
+  [fail] projected student gain clears the margin
+  [fail] routing key is identifiable in >=1 group (0/2 at p>=0.75)
+  [fail] pool contains misses the best single teacher does not (2 vs 2)
+
+------------------------------------------------------------------------------
+  VERDICT: DO NOT RUN -- and the reason is the interesting one. The
+           per-group teacher ranking is not estimable on 134 val
+           images, so ANY arm routed on it is fitting sampling noise.
+           This is a result about the DESIGN, not about the method:
+           report the identifiability table. It is the answer to
+           'why not just group by skin tone', which Stages C and M
+           each asserted without measuring.
+------------------------------------------------------------------------------

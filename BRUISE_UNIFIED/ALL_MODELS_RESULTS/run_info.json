@@ -1,0 +1,10 @@
+{
+  "n_models": 75,
+  "n_comparable": 50,
+  "n_files_seen": 90,
+  "cohorts": [
+    "REFERENCE",
+    "val:c827901ce6"
+  ],
+  "note": "ALL_MODELS_SUMMARY.csv is the single table. `comparable=True` rows share one decile cut and one test set and may be compared directly; other rows may not."
+}

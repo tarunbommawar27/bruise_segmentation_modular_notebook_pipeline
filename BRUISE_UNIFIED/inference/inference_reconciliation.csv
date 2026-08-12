@@ -1,0 +1,25 @@
+model,run_id,status,n,mean_dice_fresh,mean_dice_shipped,mean_dice_delta,max_abs_dice_delta,miss_delta
+segformer_b2_teacher,segformer_b2_teacher__seed0,ok,185,0.7692502798059441,0.769239935340936,1.0344465008027548e-05,0.0010335889552567923,0.0
+segformer_b0_direct,segformer_b0_direct__seed0,ok,185,0.766330301105905,0.7663177797978681,1.2521308036972378e-05,0.003586398775537736,0.0
+segformer_b0_distilled,segformer_b0_distilled__seed0,ok,185,0.7680253559310343,0.7680109559522049,1.439997882934918e-05,0.002214056400265202,0.0
+segformer_b0_rgkd,segformer_b0_rgkd__seed0,no shipped table,185,0.7660417958076489,,,,
+unet_r50,unet_r50__seed0,ok,185,0.7354297915753881,0.7354297915753881,0.0,1.1102230246251565e-16,0.0
+deeplabv3plus_r50,deeplabv3plus_r50__seed0,ok,185,0.7583769526490144,0.7583768558852945,9.676371992561883e-08,1.7901288172472718e-05,0.0
+yolo_sem_direct,yolo_sem_direct__seed2,ok,185,0.7020865733807025,0.7021261834301191,-3.9610049416660686e-05,0.006826513039996651,0.0
+yolo_sem_distilled,yolo_sem_distilled__seed0,ok,185,0.7262348661862282,0.7260703223271404,0.00016454385908781788,0.004347793188055782,-1.0
+lraspp_mobilenetv3,lraspp_mobilenetv3__seed0,ok,185,0.7458129798501084,0.7458129798501084,0.0,1.1102230246251565e-16,0.0
+lraspp_mobilenetv3_b2kd,lraspp_mobilenetv3_b2kd__seed0,no shipped table,185,0.7494641653115778,,,,
+lraspp_mobilenetv3_distilled,lraspp_mobilenetv3_distilled__seed0,no shipped table,185,0.7406252685886888,,,,
+lraspp_mobilenetv3_rgkd,lraspp_mobilenetv3_rgkd__seed0,no shipped table,185,0.70048493403396,,,,
+topformer_tiny,topformer_tiny__seed0,ok,185,0.6801360613802793,0.6801360613802793,0.0,1.1102230246251565e-16,0.0
+topformer_tiny_b2kd,topformer_tiny_b2kd__seed0,no shipped table,185,0.6929202446750276,,,,
+topformer_tiny_distilled,topformer_tiny_distilled__seed0,no shipped table,185,0.6929494226153168,,,,
+topformer_tiny_rgkd,topformer_tiny_rgkd__seed0,no shipped table,185,0.6906682314284014,,,,
+ppmobileseg_tiny,ppmobileseg_tiny__seed0,ok,185,0.6483675371996476,0.6483675371996476,0.0,1.1102230246251565e-16,0.0
+ppmobileseg_tiny_b2kd,ppmobileseg_tiny_b2kd__seed0,no shipped table,185,0.6817607750111644,,,,
+ppmobileseg_tiny_distilled,ppmobileseg_tiny_distilled__seed0,no shipped table,185,0.6891336426271607,,,,
+ppmobileseg_tiny_rgkd,ppmobileseg_tiny_rgkd__seed0,no shipped table,185,0.6820384620550544,,,,
+fastscnn,fastscnn__seed0,ok,185,0.6381202346413283,0.6381202346413283,0.0,1.1102230246251565e-16,0.0
+fastscnn_b2kd,fastscnn_b2kd__seed0,no shipped table,185,0.6504153810601941,,,,
+fastscnn_distilled,fastscnn_distilled__seed0,ok,185,0.6327557810217977,0.6327557810217977,0.0,1.1102230246251565e-16,0.0
+fastscnn_rgkd,fastscnn_rgkd__seed0,no shipped table,185,0.6002173824041451,,,,

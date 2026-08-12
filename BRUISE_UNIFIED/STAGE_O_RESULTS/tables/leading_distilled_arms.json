@@ -1,0 +1,10 @@
+{
+  "models": [
+    "p3_adaptive",
+    "p2_cwd_b5_to_b0",
+    "expA_b5_to_b0_response",
+    "segformer_b0_distilled",
+    "p3_adaptive_boundary",
+    "segformer_b0_rgkd"
+  ]
+}

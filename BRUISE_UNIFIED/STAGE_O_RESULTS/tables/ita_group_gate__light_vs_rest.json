@@ -1,0 +1,132 @@
+{
+  "scheme": "light_vs_rest",
+  "groups": [
+    "Light",
+    "Other"
+  ],
+  "beta": 8.0,
+  "n_val_images": 134,
+  "n_subjects": 20,
+  "teachers": [
+    "segformer_b5_teacher",
+    "deeplabv3plus_r50",
+    "medsam_ft"
+  ],
+  "per_teacher_val_dice": {
+    "segformer_b5_teacher": 0.788137031341203,
+    "deeplabv3plus_r50": 0.7837689676185426,
+    "medsam_ft": 0.7957234995236
+  },
+  "best_single_teacher": "medsam_ft",
+  "best_single_val_dice": 0.7957234995236,
+  "group_weighted_val_dice": 0.7901296769478177,
+  "weighting_gain_over_best_single": -0.005593822575781893,
+  "weighting_gain_ci95": [
+    -0.017432486327196465,
+    -0.0015859501328814806
+  ],
+  "p_gain_positive": 0.0005,
+  "per_image_oracle_val_dice": 0.8407553564592581,
+  "per_image_oracle_gain": 0.04503185693565814,
+  "transfer_rate_used": 0.2635658914728682,
+  "transfer_rate_provenance": "Stage C: student +0.0068 realised from oracle +0.0258",
+  "projected_student_gain": -0.0014743408339270103,
+  "projected_student_gain_ci95": [
+    -0.004594608799416122,
+    -0.0004180023606044212
+  ],
+  "margin": 0.01,
+  "min_identifiability": 0.75,
+  "identifiability": [
+    {
+      "group": "Light",
+      "n_images": 31,
+      "n_subjects": 7,
+      "best_teacher": "medsam_ft",
+      "best_dice": 0.7831365885864857,
+      "runner_up": "deeplabv3plus_r50",
+      "runner_up_dice": 0.7678642230755439,
+      "margin": 0.015272365510941799,
+      "spread": 0.046653754938731806,
+      "p_argmax_stable": 0.68725,
+      "identifiable": false
+    },
+    {
+      "group": "Other",
+      "n_images": 103,
+      "n_subjects": 19,
+      "best_teacher": "segformer_b5_teacher",
+      "best_dice": 0.8036834403557362,
+      "runner_up": "medsam_ft",
+      "runner_up_dice": 0.7995117931066147,
+      "margin": 0.004171647249121557,
+      "spread": 0.01512760787473777,
+      "p_argmax_stable": 0.6585,
+      "identifiable": false
+    }
+  ],
+  "n_identifiable_groups": 0,
+  "weights": [
+    {
+      "group": "Light",
+      "teacher": "segformer_b5_teacher",
+      "mean_val_dice": 0.7364828336477539,
+      "weight": 0.26753746900920794,
+      "n_images": 31,
+      "n_subjects": 7
+    },
+    {
+      "group": "Light",
+      "teacher": "deeplabv3plus_r50",
+      "mean_val_dice": 0.7678642230755439,
+      "weight": 0.3438861842922768,
+      "n_images": 31,
+      "n_subjects": 7
+    },
+    {
+      "group": "Light",
+      "teacher": "medsam_ft",
+      "mean_val_dice": 0.7831365885864857,
+      "weight": 0.3885763466985154,
+      "n_images": 31,
+      "n_subjects": 7
+    },
+    {
+      "group": "Other",
+      "teacher": "segformer_b5_teacher",
+      "mean_val_dice": 0.8036834403557362,
+      "weight": 0.3504845227511216,
+      "n_images": 103,
+      "n_subjects": 19
+    },
+    {
+      "group": "Other",
+      "teacher": "deeplabv3plus_r50",
+      "mean_val_dice": 0.7885558324809985,
+      "weight": 0.31053471071659444,
+      "n_images": 103,
+      "n_subjects": 19
+    },
+    {
+      "group": "Other",
+      "teacher": "medsam_ft",
+      "mean_val_dice": 0.7995117931066147,
+      "weight": 0.338980766532284,
+      "n_images": 103,
+      "n_subjects": 19
+    }
+  ],
+  "misses_per_teacher": {
+    "segformer_b5_teacher": 3,
+    "deeplabv3plus_r50": 2,
+    "medsam_ft": 2
+  },
+  "misses_best_single": 2,
+  "misses_pool_oracle": 2,
+  "miss_gate_open": false,
+  "GATE_gain_ci_clears_zero": false,
+  "GATE_projection_clears_margin": false,
+  "GATE_key_identifiable": false,
+  "GATE_run_method": false,
+  "GATE_any": false
+}

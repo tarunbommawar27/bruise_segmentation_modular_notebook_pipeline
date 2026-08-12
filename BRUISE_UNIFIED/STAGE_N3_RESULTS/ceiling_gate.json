@@ -1,0 +1,19 @@
+{
+  "verdicts": {},
+  "ceiling_confirmed": null,
+  "reading": "MIXED -- arms disagree or sit just outside the band. Report the table, claim nothing about the ceiling.",
+  "transfer": null,
+  "band": [
+    0.75,
+    0.78
+  ],
+  "reference_dice": {
+    "segformer_b0_direct": 0.7663,
+    "segformer_b2_teacher": 0.7692,
+    "segformer_b5_teacher": 0.7727,
+    "unet_r50": 0.757,
+    "deeplabv3plus_r50": 0.758
+  },
+  "n_boot": 10000,
+  "seed": 0
+}

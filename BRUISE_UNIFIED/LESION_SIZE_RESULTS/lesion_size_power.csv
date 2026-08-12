@@ -1,0 +1,4 @@
+endpoint,median_min_detectable,worst_min_detectable,n_contrasts,n_degenerate,any_clears_zero
+mean_recall,0.06958039267176996,0.11151670452282084,6,0,True
+median_dice,0.0523821426930077,0.08761061892346783,6,0,True
+zero_dice_rate,0.023536414565826325,0.11463361123299692,6,1,True

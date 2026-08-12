@@ -1,0 +1,6 @@
+skin_tone_category,n_images,n_subjects,median_gt_px,share_small,n_small
+Light (II-III),39,9,8085.0,0.5897435897435898,23
+Intermediate (III-IV),38,17,12117.5,0.34210526315789475,13
+Tan (IV),24,15,13550.0,0.3333333333333333,8
+Brown (V),29,12,10961.0,0.41379310344827586,12
+Dark (VI),55,15,13751.0,0.32727272727272727,18

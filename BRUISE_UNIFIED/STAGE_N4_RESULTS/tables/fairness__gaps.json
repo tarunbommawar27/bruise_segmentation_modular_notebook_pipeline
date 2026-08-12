@@ -1,0 +1,38 @@
+{
+  "sam_ft": {
+    "fairness_gap": 0.12462363591270553,
+    "best_group": "Intermediate (III-IV)",
+    "worst_group": "Dark (VI)",
+    "max_miss_rate_gap": 0.041666666666666664,
+    "kruskal_H": 11.51345773705077,
+    "kruskal_p": 0.021360967077009782,
+    "significant": true
+  },
+  "medsam_ft": {
+    "fairness_gap": 0.09399229195199121,
+    "best_group": "Brown (V)",
+    "worst_group": "Dark (VI)",
+    "max_miss_rate_gap": 0.041666666666666664,
+    "kruskal_H": 10.018922588715895,
+    "kruskal_p": 0.04011013695541539,
+    "significant": true
+  },
+  "dermlip_ft": {
+    "fairness_gap": 0.12102884418715365,
+    "best_group": "Light (II-III)",
+    "worst_group": "Tan (IV)",
+    "max_miss_rate_gap": 0.0,
+    "kruskal_H": 12.026705763662676,
+    "kruskal_p": 0.017153775303171765,
+    "significant": true
+  },
+  "dinov2_ft": {
+    "fairness_gap": 0.09409971527211713,
+    "best_group": "Brown (V)",
+    "worst_group": "Light (II-III)",
+    "max_miss_rate_gap": 0.0,
+    "kruskal_H": 10.20343894435814,
+    "kruskal_p": 0.037136726736885846,
+    "significant": true
+  }
+}

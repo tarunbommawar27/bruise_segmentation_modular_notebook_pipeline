@@ -1,0 +1,246 @@
+{
+  "scheme": "five",
+  "groups": [
+    "Light (II-III)",
+    "Intermediate (III-IV)",
+    "Tan (IV)",
+    "Brown (V)",
+    "Dark (VI)"
+  ],
+  "beta": 8.0,
+  "n_val_images": 134,
+  "n_subjects": 20,
+  "teachers": [
+    "segformer_b5_teacher",
+    "deeplabv3plus_r50",
+    "medsam_ft"
+  ],
+  "per_teacher_val_dice": {
+    "segformer_b5_teacher": 0.788137031341203,
+    "deeplabv3plus_r50": 0.7837689676185426,
+    "medsam_ft": 0.7957234995236
+  },
+  "best_single_teacher": "medsam_ft",
+  "best_single_val_dice": 0.7957234995236,
+  "group_weighted_val_dice": 0.7907367232551468,
+  "weighting_gain_over_best_single": -0.004986776268452786,
+  "weighting_gain_ci95": [
+    -0.016630543967753354,
+    -0.0011539800460921928
+  ],
+  "p_gain_positive": 0.0045,
+  "per_image_oracle_val_dice": 0.8407553564592581,
+  "per_image_oracle_gain": 0.04503185693565814,
+  "transfer_rate_used": 0.2635658914728682,
+  "transfer_rate_provenance": "Stage C: student +0.0068 realised from oracle +0.0258",
+  "projected_student_gain": -0.0013143441327705017,
+  "projected_student_gain_ci95": [
+    -0.004383244146539643,
+    -0.0003041497795901903
+  ],
+  "margin": 0.01,
+  "min_identifiability": 0.75,
+  "identifiability": [
+    {
+      "group": "Light (II-III)",
+      "n_images": 31,
+      "n_subjects": 7,
+      "best_teacher": "medsam_ft",
+      "best_dice": 0.7831365885864857,
+      "runner_up": "deeplabv3plus_r50",
+      "runner_up_dice": 0.7678642230755439,
+      "margin": 0.015272365510941799,
+      "spread": 0.046653754938731806,
+      "p_argmax_stable": 0.68725,
+      "identifiable": false
+    },
+    {
+      "group": "Intermediate (III-IV)",
+      "n_images": 47,
+      "n_subjects": 12,
+      "best_teacher": "deeplabv3plus_r50",
+      "best_dice": 0.8131428945112621,
+      "runner_up": "medsam_ft",
+      "runner_up_dice": 0.8093229141868448,
+      "margin": 0.003819980324417327,
+      "spread": 0.00743153630703941,
+      "p_argmax_stable": 0.401,
+      "identifiable": false
+    },
+    {
+      "group": "Tan (IV)",
+      "n_images": 21,
+      "n_subjects": 11,
+      "best_teacher": "segformer_b5_teacher",
+      "best_dice": 0.8131650269182297,
+      "runner_up": "medsam_ft",
+      "runner_up_dice": 0.7997685768222583,
+      "margin": 0.013396450095971346,
+      "spread": 0.032905470040415996,
+      "p_argmax_stable": 0.837,
+      "identifiable": true
+    },
+    {
+      "group": "Brown (V)",
+      "n_images": 7,
+      "n_subjects": 4,
+      "best_teacher": "segformer_b5_teacher",
+      "best_dice": 0.805046583440013,
+      "runner_up": "medsam_ft",
+      "runner_up_dice": 0.7922310342158536,
+      "margin": 0.012815549224159395,
+      "spread": 0.0782733222590728,
+      "p_argmax_stable": 0.6275,
+      "identifiable": false
+    },
+    {
+      "group": "Dark (VI)",
+      "n_images": 28,
+      "n_subjects": 8,
+      "best_teacher": "segformer_b5_teacher",
+      "best_dice": 0.7928274597028382,
+      "runner_up": "medsam_ft",
+      "runner_up_dice": 0.784670727515044,
+      "margin": 0.008156732187794224,
+      "spread": 0.023874917530949946,
+      "p_argmax_stable": 0.72175,
+      "identifiable": false
+    }
+  ],
+  "n_identifiable_groups": 1,
+  "weights": [
+    {
+      "group": "Light (II-III)",
+      "teacher": "segformer_b5_teacher",
+      "mean_val_dice": 0.7364828336477539,
+      "weight": 0.26753746900920794,
+      "n_images": 31,
+      "n_subjects": 7
+    },
+    {
+      "group": "Light (II-III)",
+      "teacher": "deeplabv3plus_r50",
+      "mean_val_dice": 0.7678642230755439,
+      "weight": 0.3438861842922768,
+      "n_images": 31,
+      "n_subjects": 7
+    },
+    {
+      "group": "Light (II-III)",
+      "teacher": "medsam_ft",
+      "mean_val_dice": 0.7831365885864857,
+      "weight": 0.3885763466985154,
+      "n_images": 31,
+      "n_subjects": 7
+    },
+    {
+      "group": "Intermediate (III-IV)",
+      "teacher": "segformer_b5_teacher",
+      "mean_val_dice": 0.8057113582042227,
+      "weight": 0.3235650122407984,
+      "n_images": 47,
+      "n_subjects": 12
+    },
+    {
+      "group": "Intermediate (III-IV)",
+      "teacher": "deeplabv3plus_r50",
+      "mean_val_dice": 0.8131428945112621,
+      "weight": 0.34338502840874724,
+      "n_images": 47,
+      "n_subjects": 12
+    },
+    {
+      "group": "Intermediate (III-IV)",
+      "teacher": "medsam_ft",
+      "mean_val_dice": 0.8093229141868448,
+      "weight": 0.33304995935045434,
+      "n_images": 47,
+      "n_subjects": 12
+    },
+    {
+      "group": "Tan (IV)",
+      "teacher": "segformer_b5_teacher",
+      "mean_val_dice": 0.8131650269182297,
+      "weight": 0.3749635305925963,
+      "n_images": 21,
+      "n_subjects": 11
+    },
+    {
+      "group": "Tan (IV)",
+      "teacher": "deeplabv3plus_r50",
+      "mean_val_dice": 0.7802595568778137,
+      "weight": 0.28817992053724617,
+      "n_images": 21,
+      "n_subjects": 11
+    },
+    {
+      "group": "Tan (IV)",
+      "teacher": "medsam_ft",
+      "mean_val_dice": 0.7997685768222583,
+      "weight": 0.3368565488701575,
+      "n_images": 21,
+      "n_subjects": 11
+    },
+    {
+      "group": "Brown (V)",
+      "teacher": "segformer_b5_teacher",
+      "mean_val_dice": 0.805046583440013,
+      "weight": 0.4103098038202045,
+      "n_images": 7,
+      "n_subjects": 4
+    },
+    {
+      "group": "Brown (V)",
+      "teacher": "deeplabv3plus_r50",
+      "mean_val_dice": 0.7267732611809402,
+      "weight": 0.21936256642809746,
+      "n_images": 7,
+      "n_subjects": 4
+    },
+    {
+      "group": "Brown (V)",
+      "teacher": "medsam_ft",
+      "mean_val_dice": 0.7922310342158536,
+      "weight": 0.37032762975169786,
+      "n_images": 7,
+      "n_subjects": 4
+    },
+    {
+      "group": "Dark (VI)",
+      "teacher": "segformer_b5_teacher",
+      "mean_val_dice": 0.7928274597028382,
+      "weight": 0.36193032343728915,
+      "n_images": 28,
+      "n_subjects": 8
+    },
+    {
+      "group": "Dark (VI)",
+      "teacher": "deeplabv3plus_r50",
+      "mean_val_dice": 0.7689525421718882,
+      "weight": 0.29900263209928557,
+      "n_images": 28,
+      "n_subjects": 8
+    },
+    {
+      "group": "Dark (VI)",
+      "teacher": "medsam_ft",
+      "mean_val_dice": 0.784670727515044,
+      "weight": 0.33906704446342534,
+      "n_images": 28,
+      "n_subjects": 8
+    }
+  ],
+  "misses_per_teacher": {
+    "segformer_b5_teacher": 3,
+    "deeplabv3plus_r50": 2,
+    "medsam_ft": 2
+  },
+  "misses_best_single": 2,
+  "misses_pool_oracle": 2,
+  "miss_gate_open": false,
+  "GATE_gain_ci_clears_zero": false,
+  "GATE_projection_clears_margin": false,
+  "GATE_key_identifiable": true,
+  "GATE_run_method": false,
+  "GATE_any": false
+}

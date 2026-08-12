@@ -1,0 +1,52 @@
+==============================================================================
+STAGE O -- ITA-GROUP WEIGHTING GATE   (validation only; test untouched)
+==============================================================================
+  134 val images, 20 subjects, 3 teachers, scheme='five' (5 groups)
+
+  teacher                    val Dice   misses
+    segformer_b5_teacher      0.7881       3
+    deeplabv3plus_r50         0.7838       2
+    medsam_ft                 0.7957       2
+    GROUP-WEIGHTED            0.7907
+    per-image oracle (bound)  0.8408       2
+
+  WEIGHTS  (softmax(beta x group mean val Dice))
+    Light (II-III) segformer_b5_teacher      0.268   (dice 0.7365, n=31, 7 subj)
+    Light (II-III) deeplabv3plus_r50         0.344   (dice 0.7679, n=31, 7 subj)
+    Light (II-III) medsam_ft                 0.389   (dice 0.7831, n=31, 7 subj)
+    Intermediate (III-IV) segformer_b5_teacher      0.324   (dice 0.8057, n=47, 12 subj)
+    Intermediate (III-IV) deeplabv3plus_r50         0.343   (dice 0.8131, n=47, 12 subj)
+    Intermediate (III-IV) medsam_ft                 0.333   (dice 0.8093, n=47, 12 subj)
+    Tan (IV)       segformer_b5_teacher      0.375   (dice 0.8132, n=21, 11 subj)
+    Tan (IV)       deeplabv3plus_r50         0.288   (dice 0.7803, n=21, 11 subj)
+    Tan (IV)       medsam_ft                 0.337   (dice 0.7998, n=21, 11 subj)
+    Brown (V)      segformer_b5_teacher      0.410   (dice 0.8050, n=7, 4 subj)
+    Brown (V)      deeplabv3plus_r50         0.219   (dice 0.7268, n=7, 4 subj)
+    Brown (V)      medsam_ft                 0.370   (dice 0.7922, n=7, 4 subj)
+    Dark (VI)      segformer_b5_teacher      0.362   (dice 0.7928, n=28, 8 subj)
+    Dark (VI)      deeplabv3plus_r50         0.299   (dice 0.7690, n=28, 8 subj)
+    Dark (VI)      medsam_ft                 0.339   (dice 0.7847, n=28, 8 subj)
+
+  IDENTIFIABILITY  -- is the per-group argmax estimable at all?
+    group            n subj  best                    margin  P(stable)
+  NO  Light (II-III)  31    7  medsam_ft              +0.0153       0.69
+  NO  Intermediate (III-IV)  47   12  deeplabv3plus_r50      +0.0038       0.40
+  ok  Tan (IV)        21   11  segformer_b5_teacher   +0.0134       0.84
+  NO  Brown (V)        7    4  segformer_b5_teacher   +0.0128       0.63
+  NO  Dark (VI)       28    8  segformer_b5_teacher   +0.0082       0.72
+
+  group-weighting gain over medsam_ft: -0.0050  CI95 [-0.0166, -0.0012]  P(>0) = 0.004
+  per-image oracle gain (UPPER BOUND, unreachable by grouping): +0.0450
+  x transfer rate 0.264 (Stage C: student +0.0068 realised from oracle +0.0258)
+  PROJECTED STUDENT GAIN -0.0013  vs margin +0.0100
+
+  [fail] weighting-gain CI clears zero
+  [fail] projected student gain clears the margin
+  [PASS] routing key is identifiable in >=1 group (1/5 at p>=0.75)
+  [fail] pool contains misses the best single teacher does not (2 vs 2)
+
+------------------------------------------------------------------------------
+  VERDICT: DO NOT RUN. No headroom a student could inherit on either
+           endpoint. A negative pre-test is a result, and it cost one
+           val pass instead of a grid.
+------------------------------------------------------------------------------

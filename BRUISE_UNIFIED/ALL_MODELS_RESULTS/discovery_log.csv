@@ -1,0 +1,91 @@
+path,model,status,split,cohort,n_rows,alias_of,reason
+/scratch/tbommawa/BRUISE_UNIFIED/results/distill/reference_b0_distilled_test_per_image.csv,b0_distilled,alias,test,,185,segformer_b0_distilled,identical Dice vector to segformer_b0_distilled
+/scratch/tbommawa/BRUISE_UNIFIED/results/distill/reference_b2_teacher_test_per_image.csv,b2_teacher,alias,test,,185,segformer_b2_teacher,identical Dice vector to segformer_b2_teacher
+/scratch/tbommawa/BRUISE_UNIFIED/results/distill/reference_b2_to_b0_test_per_image.csv,b2_to_b0,alias,test,,185,segformer_b0_distilled,identical Dice vector to segformer_b0_distilled
+/scratch/tbommawa/bruise_work/outputs/per_image_distill_segformer_b0_distilled.csv,distill_segformer_b0_distilled,alias,test,,185,segformer_b0_distilled,identical Dice vector to segformer_b0_distilled
+/scratch/tbommawa/bruise_work/outputs/per_image_distill_segformer_b2_teacher.csv,distill_segformer_b2_teacher,alias,test,,185,segformer_b2_teacher,identical Dice vector to segformer_b2_teacher
+/scratch/tbommawa/BRUISE_UNIFIED/results/final/best_seed_val_selected/segformer_b0_direct_best_seed0_test_per_image.csv,segformer_b0_direct,alias,test,,185,segformer_b0_direct,identical Dice vector to segformer_b0_direct
+/scratch/tbommawa/bruise_work/outputs/per_image_segformer_b0_direct.csv,segformer_b0_direct,alias,test,,185,segformer_b0_direct,identical Dice vector to segformer_b0_direct
+/scratch/tbommawa/BRUISE_UNIFIED/results/final/best_seed_val_selected/segformer_b0_distilled_best_seed0_test_per_image.csv,segformer_b0_distilled,alias,test,,185,segformer_b0_distilled,identical Dice vector to segformer_b0_distilled
+/scratch/tbommawa/bruise_work/outputs/per_image_segformer_b0_distilled.csv,segformer_b0_distilled,alias,test,,185,segformer_b0_distilled,identical Dice vector to segformer_b0_distilled
+/scratch/tbommawa/BRUISE_UNIFIED/results/final/best_seed_val_selected/segformer_b2_teacher_best_seed0_test_per_image.csv,segformer_b2_teacher,alias,test,,185,segformer_b2_teacher,identical Dice vector to segformer_b2_teacher
+/scratch/tbommawa/bruise_work/outputs/per_image_segformer_b2_teacher.csv,segformer_b2_teacher,alias,test,,185,segformer_b2_teacher,identical Dice vector to segformer_b2_teacher
+/scratch/tbommawa/BRUISE_UNIFIED/results/final/best_seed_val_selected/yolo_sem_direct_best_seed2_test_per_image.csv,yolo_sem_direct,alias,test,,185,yolo_sem_direct,identical Dice vector to yolo_sem_direct
+/scratch/tbommawa/bruise_work/outputs/per_image_yolo_sem_direct.csv,yolo_sem_direct,alias,test,,185,yolo_sem_direct,identical Dice vector to yolo_sem_direct
+/scratch/tbommawa/BRUISE_UNIFIED/results/final/best_seed_val_selected/yolo_sem_distilled_best_seed0_test_per_image.csv,yolo_sem_distilled,alias,test,,185,yolo_sem_distilled,identical Dice vector to yolo_sem_distilled
+/scratch/tbommawa/bruise_work/outputs/per_image_yolo_sem_distilled.csv,yolo_sem_distilled,alias,test,,185,yolo_sem_distilled,identical Dice vector to yolo_sem_distilled
+/scratch/tbommawa/BRUISE_UNIFIED/DERM_PROBE_RESULTS/val_per_image__biomedclip_g28.csv,biomedclip_g28,ok,val,val:c827901ce6,134,,
+/scratch/tbommawa/bruise_work/outputs/per_image_deeplabv3plus_r50.csv,deeplabv3plus_r50,ok,test,REFERENCE,185,,
+/scratch/tbommawa/BRUISE_UNIFIED/STAGE_N3_RESULTS/tables/test_per_image__dermlip_ft__seed0.csv,dermlip_ft__seed0,ok,test,REFERENCE,185,,
+/scratch/tbommawa/BRUISE_UNIFIED/STAGE_N3_RESULTS/tables/val_per_image__dermlip_ft__seed0.csv,dermlip_ft__seed0#c827,ok,val,val:c827901ce6,134,,name collision; renamed to dermlip_ft__seed0#c827
+/scratch/tbommawa/BRUISE_UNIFIED/DERM_PROBE_RESULTS/val_per_image__dermlip_g28.csv,dermlip_g28,ok,val,val:c827901ce6,134,,
+/scratch/tbommawa/BRUISE_UNIFIED/STAGE_N3_RESULTS/tables/test_per_image__dinov2_ft__seed0.csv,dinov2_ft__seed0,ok,test,REFERENCE,185,,
+/scratch/tbommawa/BRUISE_UNIFIED/STAGE_N3_RESULTS/tables/val_per_image__dinov2_ft__seed0.csv,dinov2_ft__seed0#c827,ok,val,val:c827901ce6,134,,name collision; renamed to dinov2_ft__seed0#c827
+/scratch/tbommawa/BRUISE_UNIFIED/DERM_PROBE_RESULTS/val_per_image__dinov2_g28.csv,dinov2_g28,ok,val,val:c827901ce6,134,,
+/scratch/tbommawa/BRUISE_UNIFIED/FOUNDATION_RESULTS/val_per_image__dinov2_probe.csv,dinov2_probe,ok,val,val:c827901ce6,134,,
+/scratch/tbommawa/bruise_work/outputs/per_image_distill_expA_b5_to_b0_response.csv,distill_expA_b5_to_b0_response,ok,test,REFERENCE,185,,
+/scratch/tbommawa/bruise_work/outputs/per_image_distill_p2_bpkd_b5_to_b0.csv,distill_p2_bpkd_b5_to_b0,ok,test,REFERENCE,185,,
+/scratch/tbommawa/bruise_work/outputs/per_image_distill_p2_cwd_b5_to_b0.csv,distill_p2_cwd_b5_to_b0,ok,test,REFERENCE,185,,
+/scratch/tbommawa/bruise_work/outputs/per_image_distill_p2_ensemble_uniform.csv,distill_p2_ensemble_uniform,ok,test,REFERENCE,185,,
+/scratch/tbommawa/bruise_work/outputs/per_image_distill_p3_adaptive.csv,distill_p3_adaptive,ok,test,REFERENCE,185,,
+/scratch/tbommawa/bruise_work/outputs/per_image_distill_p3_adaptive_boundary.csv,distill_p3_adaptive_boundary,ok,test,REFERENCE,185,,
+/scratch/tbommawa/bruise_work/outputs/per_image_distill_p3_adaptive_full.csv,distill_p3_adaptive_full,ok,test,REFERENCE,185,,
+/scratch/tbommawa/bruise_work/outputs/per_image_distill_p3_adaptive_group.csv,distill_p3_adaptive_group,ok,test,REFERENCE,185,,
+/scratch/tbommawa/bruise_work/outputs/per_image_distill_p3_adaptive_hard.csv,distill_p3_adaptive_hard,ok,test,REFERENCE,185,,
+/scratch/tbommawa/bruise_work/outputs/per_image_distill_segformer_b5__seed2026.csv,distill_segformer_b5__seed2026,ok,test,REFERENCE,185,,
+/scratch/tbommawa/bruise_work/outputs/per_image_distill_segformer_b5__seed42.csv,distill_segformer_b5__seed42,ok,test,REFERENCE,185,,
+/scratch/tbommawa/bruise_work/outputs/per_image_distill_segformer_b5_teacher.csv,distill_segformer_b5_teacher,ok,test,REFERENCE,185,,
+/scratch/tbommawa/bruise_work/outputs/per_image_distill_x_angular_b5_to_b0.csv,distill_x_angular_b5_to_b0,ok,test,REFERENCE,185,,
+/scratch/tbommawa/BRUISE_UNIFIED/_work/outputs/per_image_fastscnn.csv,fastscnn,ok,test,REFERENCE,185,,
+/scratch/tbommawa/bruise_work/outputs/per_image_fastscnn.csv,fastscnn#e981,ok,test,REFERENCE,185,,name collision; renamed to fastscnn#e981
+/scratch/tbommawa/bruise_work/outputs/per_image_fastscnn_b2kd.csv,fastscnn_b2kd,ok,test,REFERENCE,185,,
+/scratch/tbommawa/BRUISE_UNIFIED/_work/outputs/per_image_fastscnn_distilled.csv,fastscnn_distilled,ok,test,REFERENCE,185,,
+/scratch/tbommawa/bruise_work/outputs/per_image_fastscnn_distilled.csv,fastscnn_distilled#e981,ok,test,REFERENCE,185,,name collision; renamed to fastscnn_distilled#e981
+/scratch/tbommawa/bruise_work/outputs/per_image_fastscnn_rgkd.csv,fastscnn_rgkd,ok,test,REFERENCE,185,,
+/scratch/tbommawa/BRUISE_UNIFIED/_work/outputs/per_image_lraspp_mobilenetv3.csv,lraspp_mobilenetv3,ok,test,REFERENCE,185,,
+/scratch/tbommawa/bruise_work/outputs/per_image_lraspp_mobilenetv3.csv,lraspp_mobilenetv3#e981,ok,test,REFERENCE,185,,name collision; renamed to lraspp_mobilenetv3#e981
+/scratch/tbommawa/bruise_work/outputs/per_image_lraspp_mobilenetv3_b2kd.csv,lraspp_mobilenetv3_b2kd,ok,test,REFERENCE,185,,
+/scratch/tbommawa/bruise_work/outputs/per_image_lraspp_mobilenetv3_distilled.csv,lraspp_mobilenetv3_distilled,ok,test,REFERENCE,185,,
+/scratch/tbommawa/bruise_work/outputs/per_image_lraspp_mobilenetv3_rgkd.csv,lraspp_mobilenetv3_rgkd,ok,test,REFERENCE,185,,
+/scratch/tbommawa/BRUISE_UNIFIED/STAGE_N4_RESULTS/tables/test_per_image__medsam_ft__seed0.csv,medsam_ft__seed0,ok,test,REFERENCE,185,,
+/scratch/tbommawa/BRUISE_UNIFIED/STAGE_N4_RESULTS/tables/val_per_image__medsam_ft__seed0.csv,medsam_ft__seed0#c827,ok,val,val:c827901ce6,134,,name collision; renamed to medsam_ft__seed0#c827
+/scratch/tbommawa/BRUISE_UNIFIED/STAGE_N4_RESULTS/tables/test_per_image__medsam_ft__seed1.csv,medsam_ft__seed1,ok,test,REFERENCE,185,,
+/scratch/tbommawa/BRUISE_UNIFIED/STAGE_N4_RESULTS/tables/val_per_image__medsam_ft__seed1.csv,medsam_ft__seed1#c827,ok,val,val:c827901ce6,134,,name collision; renamed to medsam_ft__seed1#c827
+/scratch/tbommawa/BRUISE_UNIFIED/STAGE_N4_RESULTS/tables/test_per_image__medsam_ft__seed2.csv,medsam_ft__seed2,ok,test,REFERENCE,185,,
+/scratch/tbommawa/BRUISE_UNIFIED/STAGE_N4_RESULTS/tables/val_per_image__medsam_ft__seed2.csv,medsam_ft__seed2#c827,ok,val,val:c827901ce6,134,,name collision; renamed to medsam_ft__seed2#c827
+/scratch/tbommawa/BRUISE_UNIFIED/DERM_PROBE_RESULTS/val_per_image__medsiglip_g28.csv,medsiglip_g28,ok,val,val:c827901ce6,134,,
+/scratch/tbommawa/BRUISE_UNIFIED/FOUNDATION_RESULTS/val_per_image__medsiglip_probe.csv,medsiglip_probe,ok,val,val:c827901ce6,134,,
+/scratch/tbommawa/BRUISE_UNIFIED/DERM_PROBE_RESULTS/val_per_image__pixel_g20.csv,pixel_g20,ok,val,val:c827901ce6,134,,
+/scratch/tbommawa/BRUISE_UNIFIED/DERM_PROBE_RESULTS/val_per_image__pixel_g28.csv,pixel_g28,ok,val,val:c827901ce6,134,,
+/scratch/tbommawa/BRUISE_UNIFIED/DERM_PROBE_RESULTS/val_per_image__pixel_g37.csv,pixel_g37,ok,val,val:c827901ce6,134,,
+/scratch/tbommawa/BRUISE_UNIFIED/DERM_PROBE_RESULTS/val_per_image__pixel_g40.csv,pixel_g40,ok,val,val:c827901ce6,134,,
+/scratch/tbommawa/BRUISE_UNIFIED/_work/outputs/per_image_ppmobileseg_tiny.csv,ppmobileseg_tiny,ok,test,REFERENCE,185,,
+/scratch/tbommawa/bruise_work/outputs/per_image_ppmobileseg_tiny.csv,ppmobileseg_tiny#e981,ok,test,REFERENCE,185,,name collision; renamed to ppmobileseg_tiny#e981
+/scratch/tbommawa/bruise_work/outputs/per_image_ppmobileseg_tiny_b2kd.csv,ppmobileseg_tiny_b2kd,ok,test,REFERENCE,185,,
+/scratch/tbommawa/bruise_work/outputs/per_image_ppmobileseg_tiny_distilled.csv,ppmobileseg_tiny_distilled,ok,test,REFERENCE,185,,
+/scratch/tbommawa/bruise_work/outputs/per_image_ppmobileseg_tiny_rgkd.csv,ppmobileseg_tiny_rgkd,ok,test,REFERENCE,185,,
+/scratch/tbommawa/BRUISE_UNIFIED/FOUNDATION_RESULTS/val_per_image__resnet50_probe.csv,resnet50_probe,ok,val,val:c827901ce6,134,,
+/scratch/tbommawa/BRUISE_UNIFIED/DERM_PROBE_RESULTS/val_per_image__rn50_g28.csv,rn50_g28,ok,val,val:c827901ce6,134,,
+/scratch/tbommawa/BRUISE_UNIFIED/DERM_PROBE_RESULTS/val_per_image__rn50_l3_g20.csv,rn50_l3_g20,ok,val,val:c827901ce6,134,,
+/scratch/tbommawa/BRUISE_UNIFIED/DERM_PROBE_RESULTS/val_per_image__rn50_l3_g28.csv,rn50_l3_g28,ok,val,val:c827901ce6,134,,
+/scratch/tbommawa/BRUISE_UNIFIED/DERM_PROBE_RESULTS/val_per_image__rn50_l3_g37.csv,rn50_l3_g37,ok,val,val:c827901ce6,134,,
+/scratch/tbommawa/BRUISE_UNIFIED/DERM_PROBE_RESULTS/val_per_image__rn50_l3_g40.csv,rn50_l3_g40,ok,val,val:c827901ce6,134,,
+/scratch/tbommawa/BRUISE_UNIFIED/DERM_PROBE_RESULTS/val_per_image__rn50_l4_g20.csv,rn50_l4_g20,ok,val,val:c827901ce6,134,,
+/scratch/tbommawa/BRUISE_UNIFIED/STAGE_N4_RESULTS/tables/test_per_image__sam_ft__seed0.csv,sam_ft__seed0,ok,test,REFERENCE,185,,
+/scratch/tbommawa/BRUISE_UNIFIED/STAGE_N4_RESULTS/tables/val_per_image__sam_ft__seed0.csv,sam_ft__seed0#c827,ok,val,val:c827901ce6,134,,name collision; renamed to sam_ft__seed0#c827
+/scratch/tbommawa/BRUISE_UNIFIED/STAGE_N4_RESULTS/tables/test_per_image__sam_ft__seed1.csv,sam_ft__seed1,ok,test,REFERENCE,185,,
+/scratch/tbommawa/BRUISE_UNIFIED/STAGE_N4_RESULTS/tables/val_per_image__sam_ft__seed1.csv,sam_ft__seed1#c827,ok,val,val:c827901ce6,134,,name collision; renamed to sam_ft__seed1#c827
+/scratch/tbommawa/BRUISE_UNIFIED/STAGE_N4_RESULTS/tables/test_per_image__sam_ft__seed2.csv,sam_ft__seed2,ok,test,REFERENCE,185,,
+/scratch/tbommawa/BRUISE_UNIFIED/STAGE_N4_RESULTS/tables/val_per_image__sam_ft__seed2.csv,sam_ft__seed2#c827,ok,val,val:c827901ce6,134,,name collision; renamed to sam_ft__seed2#c827
+/scratch/tbommawa/BRUISE_UNIFIED/results/analysis_native/per_image_segformer_b0_direct.csv,segformer_b0_direct,ok,test,REFERENCE,185,,
+/scratch/tbommawa/BRUISE_UNIFIED/results/analysis_native/per_image_segformer_b0_distilled.csv,segformer_b0_distilled,ok,test,REFERENCE,185,,
+/scratch/tbommawa/bruise_work/outputs/per_image_segformer_b0_rgkd.csv,segformer_b0_rgkd,ok,test,REFERENCE,185,,
+/scratch/tbommawa/BRUISE_UNIFIED/results/analysis_native/per_image_segformer_b2_teacher.csv,segformer_b2_teacher,ok,test,REFERENCE,185,,
+/scratch/tbommawa/BRUISE_UNIFIED/_work/outputs/per_image_topformer_tiny.csv,topformer_tiny,ok,test,REFERENCE,185,,
+/scratch/tbommawa/bruise_work/outputs/per_image_topformer_tiny.csv,topformer_tiny#e981,ok,test,REFERENCE,185,,name collision; renamed to topformer_tiny#e981
+/scratch/tbommawa/bruise_work/outputs/per_image_topformer_tiny_b2kd.csv,topformer_tiny_b2kd,ok,test,REFERENCE,185,,
+/scratch/tbommawa/bruise_work/outputs/per_image_topformer_tiny_distilled.csv,topformer_tiny_distilled,ok,test,REFERENCE,185,,
+/scratch/tbommawa/bruise_work/outputs/per_image_topformer_tiny_rgkd.csv,topformer_tiny_rgkd,ok,test,REFERENCE,185,,
+/scratch/tbommawa/bruise_work/outputs/per_image_unet_r50.csv,unet_r50,ok,test,REFERENCE,185,,
+/scratch/tbommawa/BRUISE_UNIFIED/results/analysis_native/per_image_yolo_sem_direct.csv,yolo_sem_direct,ok,test,REFERENCE,185,,
+/scratch/tbommawa/BRUISE_UNIFIED/results/analysis_native/per_image_yolo_sem_distilled.csv,yolo_sem_distilled,ok,test,REFERENCE,185,,

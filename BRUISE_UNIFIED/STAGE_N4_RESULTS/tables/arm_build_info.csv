@@ -1,0 +1,3 @@
+,arm,grid,enc_size,patch,embed_dim,use_neck,blocks_found_at,blocks_total,blocks_unfrozen,neck,neck_unfrozen,feature_source,pos_embed_native_grid,pos_embed_resampled_to,encoder_trainable_params,encoder_total_params,encoder_trainable_fraction,decoder_params,total_params,trainable_params
+sam_ft,sam_ft,40,640,16,256,True,layers,12,6,neck,True,neck,64,40,43361024,87753984,0.4941,951169,88705153,44312193
+medsam_ft,medsam_ft,40,640,16,256,True,layers,12,6,neck,True,neck,64,40,43361024,87753984,0.4941,951169,88705153,44312193

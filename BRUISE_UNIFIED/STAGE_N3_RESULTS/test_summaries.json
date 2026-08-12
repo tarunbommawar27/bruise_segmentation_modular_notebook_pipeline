@@ -1,0 +1,30 @@
+{
+  "dinov2_ft__seed0": {
+    "n_images": 185,
+    "mean_dice": 0.7901600563440758,
+    "median_dice": 0.8305261588910419,
+    "mean_iou": 0.6731622499324866,
+    "median_iou": 0.7101707876625032,
+    "mean_precision": 0.8472639890712915,
+    "mean_recall": 0.7715673916069271,
+    "complete_miss_count": 0,
+    "complete_miss_rate": 0.0,
+    "cut": 1.4750000000000005,
+    "split": "test",
+    "misses": 0
+  },
+  "dermlip_ft__seed0": {
+    "n_images": 185,
+    "mean_dice": 0.704268940140205,
+    "median_dice": 0.7583998633821457,
+    "mean_iou": 0.5722524018788976,
+    "median_iou": 0.6108245650230383,
+    "mean_precision": 0.7537669086556363,
+    "mean_recall": 0.6949194074043554,
+    "complete_miss_count": 0,
+    "complete_miss_rate": 0.0,
+    "cut": -1.3999999999999995,
+    "split": "test",
+    "misses": 0
+  }
+}

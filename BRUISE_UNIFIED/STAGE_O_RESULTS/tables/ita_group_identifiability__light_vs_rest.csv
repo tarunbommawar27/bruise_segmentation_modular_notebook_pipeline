@@ -1,0 +1,3 @@
+group,n_images,n_subjects,best_teacher,best_dice,runner_up,runner_up_dice,margin,spread,p_argmax_stable,identifiable
+Light,31,7,medsam_ft,0.7831365885864857,deeplabv3plus_r50,0.7678642230755439,0.015272365510941799,0.046653754938731806,0.68725,False
+Other,103,19,segformer_b5_teacher,0.8036834403557362,medsam_ft,0.7995117931066147,0.004171647249121557,0.01512760787473777,0.6585,False

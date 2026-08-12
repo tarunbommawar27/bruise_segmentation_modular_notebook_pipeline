@@ -1,0 +1,70 @@
+{
+  "verdicts": {
+    "sam_ft": "ABOVE_BAND",
+    "medsam_ft": "ABOVE_BAND"
+  },
+  "contrasts": {
+    "medsam_ft - sam_ft": {
+      "delta": 0.0036638057170393923,
+      "ci_lo": -0.010894655413347018,
+      "ci_hi": 0.015052425073771492,
+      "clears_zero": false,
+      "n_images": 134,
+      "n_subjects": 20,
+      "kind": "confirmatory",
+      "question": "THE PRIMARY. Objective, architecture, capacity and recipe held fixed; only the pretraining corpus moves. The cleanest medical-corpus contrast in the project."
+    },
+    "sam_ft - dinov2_ft": {
+      "delta": 0.009624250249979927,
+      "ci_lo": -0.013312396998290501,
+      "ci_hi": 0.025072090801566183,
+      "clears_zero": false,
+      "n_images": 134,
+      "n_subjects": 20,
+      "kind": "confirmatory",
+      "question": "Does dense mask supervision beat patch-level SSL? Tests 7h.9 item 2 -- that the N/N2/N3 ranking was an OBJECTIVE effect wearing a corpus label."
+    },
+    "medsam_ft - dinov2_ft": {
+      "delta": 0.013288055967019319,
+      "ci_lo": -0.006441931501941003,
+      "ci_hi": 0.028396621824434323,
+      "clears_zero": false,
+      "n_images": 134,
+      "n_subjects": 20,
+      "kind": "confirmatory",
+      "question": "The headline the write-up will be asked for: does the medical mask encoder beat the study's best foundation arm?"
+    },
+    "medsam_ft - dermlip_ft": {
+      "delta": 0.07225844064398068,
+      "ci_lo": 0.03253355538155129,
+      "ci_hi": 0.10609731244897412,
+      "clears_zero": true,
+      "n_images": 134,
+      "n_subjects": 20,
+      "kind": "exploratory",
+      "question": "Medical masks against medical captions, both ViT-B/16 at grid 40. POST-HOC in the sense that it is not what the stage was designed to answer, but it is the contrast that separates corpus from objective most directly."
+    }
+  },
+  "corpus_helps": false,
+  "reading": "NULL ON THE MEDICAL CORPUS. With the OBJECTIVE held fixed (both arms mask-supervised), the architecture matched (ViT-B/16) and the recipe identical, a 1.5 M-pair medical mask corpus buys nothing over natural images. Together with N2 (captions, frozen) and N3 (captions, fine-tuned) that is the medical-pretraining question closed on a fourth axis. READ THE SMALL-LESION TABLE BEFORE CALLING IT A NULL -- a Dice null with a miss-rate win is a result, not an absence of one.\n  NOTE: an arm cleared 0.79, which is Stage N3's 'ceiling not binding' trigger. That reading is independent of the corpus verdict above and belongs in the write-up too.",
+  "band": [
+    0.75,
+    0.78
+  ],
+  "reference_dice_val": {
+    "dinov2_ft": 0.7824,
+    "dermlip_ft": 0.7235
+  },
+  "reference_dice_test": {
+    "dinov2_ft": 0.7902,
+    "dermlip_ft": 0.7043,
+    "segformer_b5_teacher": 0.7727,
+    "segformer_b2_teacher": 0.7692,
+    "segformer_b0_direct": 0.7663
+  },
+  "n_boot": 10000,
+  "seed": 0,
+  "unfreeze_blocks": 6,
+  "target_grid": 40,
+  "use_neck": true
+}

@@ -1,0 +1,5 @@
+arm,corpus,dice,ci_lo,ci_hi,median,iqr,misses,miss_rate,n,verdict
+sam_ft,"natural images, mask-supervised",0.7921,0.7462,0.8372,0.8436,0.1312,2,0.0149,134,ABOVE_BAND
+medsam_ft,"medical images, mask-supervised",0.7957,0.7583,0.8339,0.8434,0.1466,2,0.0149,134,ABOVE_BAND
+dermlip_ft,-- Stage N3 --,0.7235,0.6772,0.7794,0.7708,0.2001,2,0.0149,134,reference (Stage N3)
+dinov2_ft,-- Stage N3 --,0.7824,0.7404,0.8252,0.8386,0.2033,2,0.0149,134,reference (Stage N3)
