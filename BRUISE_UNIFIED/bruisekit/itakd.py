@@ -1854,6 +1854,16 @@ def train_arms(env, reg, cfg: dict, man640: dict, runs_dir,
             f"run(s) with a three-teacher pool but device is {env.device}. This "
             f"needs a GPU session.")
 
+    # `engine.build_model` knows segformer / smp / yolo and nothing else, so a
+    # non-SegFormer student dies with `ValueError: unknown arch` -- which is what
+    # the first ORC run hit, after the SegFormer arm had already trained for an
+    # hour. Installed here rather than left to the caller for the same reason
+    # alpha is resolved here: a shell run and a notebook run must not be able to
+    # disagree about what got installed.
+    if any(STUDENT_ARCH[f] != "segformer" for f in families):
+        from . import efficient_models as EM
+        EM.install_efficient_shim(env, verbose=verbose)
+
     register_specs()
     runs_dir = Path(runs_dir)
     runs_dir.mkdir(parents=True, exist_ok=True)

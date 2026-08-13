@@ -26,7 +26,7 @@ it and how to *change* it.
 7h. [Stage N2 — the grid control, and *dermatology* pretraining **(RUN — gate CLOSED; §7f.8 superseded)**](#7h-stage-n2--the-grid-control-and-dermatology-pretraining)
 7i. [Stage N3 — the annotation ceiling on a third axis **(RUN 2026-08-10 — `dinov2_ft` 0.7902 test, 0 misses; does not separate from B2/B0; §7i.7)**](#7i-stage-n3--the-annotation-ceiling-on-a-third-axis)
 7j. [Stage N4 — mask vs caption pretraining **(RUN 2026-08-11 — `medsam − sam` = +0.0037, CI spans zero; but MedSAM is the best single teacher on VAL; §7j.3, §7j.4)**](#7j-stage-n4--mask-pretraining-vs-caption-pretraining-run-2026-08-11)
-7k. [Stage O — miss taxonomy, distilled-arm fairness, ITA-group routing **(RUN 2026-08-12 — two analyses delivered; the routing gate is CLOSED on both schemes; §7k.5)**](#7k-stage-o--the-miss-taxonomy-distilled-arm-fairness-and-ita-group-routing)
+7k. [Stage O — miss taxonomy, distilled-arm fairness, ITA-group routing **(RUN 2026-08-12; gate CLOSED on both schemes, arm TRAINED ANYWAY 2026-08-13 at one seed — the gate was right; §7k.5b)**](#7k-stage-o--the-miss-taxonomy-distilled-arm-fairness-and-ita-group-routing)
 7l. [The re-inference sweep — the pipeline verified against itself **(RUN 2026-08-12)**](#7l-the-re-inference-sweep--the-pipeline-verified-against-itself)
 8. [Stage D — analysis methodology](#8-stage-d--analysis-methodology)
 8b. [Stage G — final significance](#8b-stage-g--final-significance)
@@ -3782,6 +3782,98 @@ difference", which still does not rescue the blend — it would have to *win* on
 fairness to justify losing on Dice, and it does not lead even on the point
 estimate.
 
+### 7k.5b THE ARM WAS TRAINED ANYWAY — run 2026-08-13, one seed
+
+The gate closed. We trained it regardless, deliberately, and **the gate was
+right.** A pre-registration is written to be falsifiable, not obeyed: the gate is
+a projection, and a measured null is a stronger paper section than a predicted
+one. Two students, one seed, ~4.4 GPU-h.
+
+The override is recorded in `STAGE_O_RESULTS/runs/FORCED_GATE.json` with the
+failing clauses verbatim (`itakd.record_override`), and the notebook refuses to
+start without a gate file to override. **Any table drawn from that directory must
+say the gate closed first.**
+
+| | median Dice | missed | of which blank | small-bruise recall |
+|---|---|---|---|---|
+| `segformer_b0_itakd` | 0.8166 | **2** | 1 | **0.718** |
+| `segformer_b0_distilled` (control) | 0.8167 | **0** | 0 | 0.783 |
+| `lraspp_mobilenetv3_itakd` | **0.7884** | **0** | 0 | **0.704** |
+| `lraspp_mobilenetv3_b2kd` (control) | 0.7774 | 1 | 1 | 0.844 |
+
+**Accuracy: nothing, in both directions.** −0.0001 and +0.0110. One seed cannot
+resolve below ~0.006 (seed sd 0.004 × √2), and neither is near §1's 0.05 floor.
+
+**Misses: it broke the one model that was perfect.** `segformer_b0_distilled`
+missed 0 of 185; the ITA version misses 2. LR-ASPP went 1 → 0. One image each
+way — noise, not a method.
+
+**Small bruises: consistently worse, and this is the only consistent signal.**
+0.783 → 0.718 and 0.844 → 0.704. Both arms lost ground on the photographs that
+are hardest to see, in the same direction. LR-ASPP gave up 0.14 on exactly the
+stratum it was previously the study's best at (§7k.3).
+
+#### 7k.5c Per skin-tone group — the comparison the scheme has to survive
+
+An aggregate cannot settle a method that routes *by* skin tone: a wash overall
+could hide a real gain on one group and a matching loss elsewhere. It does not.
+
+| group | n | `segformer_b0_itakd` − control | `lraspp_itakd` − control |
+|---|---|---|---|
+| Light (II-III) | 39 | **−0.0223** | **+0.0153** |
+| Intermediate (III-IV) | 38 | +0.0243 | −0.0037 |
+| Tan (IV) | 24 | −0.0123 | +0.0130 |
+| Brown (V) | 29 | −0.0040 | +0.0173 |
+| Dark (VI) | 55 | +0.0071 | −0.0033 |
+
+**The signs disagree between the two students on four of five groups, including
+Light — the group the scheme was designed around.** If skin tone carried real
+information about which teacher to trust, both students would move the same way.
+They do not. That is what an unidentifiable routing key looks like in the results
+rather than in the gate.
+
+A further sign it is noise: the scheme used **two** weight rows (Light vs rest),
+yet `segformer_b0_itakd`'s best group (Intermediate, +0.0243) and worst (Light,
+−0.0223) sit on *opposite* sides of that split by similar magnitudes — and
+Intermediate shared its weights with Tan, Brown and Dark, which moved differently
+again.
+
+#### 7k.5d Reporting rule for these runs
+
+One seed. Say **"a screen that did not contradict the pre-test"**, not "a measured
+null" — the second needs seeds 1 and 2, which is +9 GPU-h and has not been spent.
+Quote the identifiability table (§7k.5) beside any statement about the outcome:
+0 of 2 groups had an estimable argmax, and that is true whatever the students did.
+
+#### 7k.5e Three setup failures the preflight let through, and why
+
+All three surfaced on the first ORC run **after** `preflight()` passed, which is
+the failure this section exists to record.
+
+| # | symptom | cause |
+|---|---|---|
+| 1 | `KeyError: 'segformer_b0_itakd'` in `multiteacher.control_batch` | that helper resolves the control from `multiteacher.CONTROL_FOR`; Stage O's controls lived only in `itakd.CONTROL_FOR` |
+| 2 | `KeyError: 'alpha'` in `engine.train_run` | it reads `cfg["alpha"]`; the notebooks carry `segformer_alpha` / `efficient_alpha` and the unified notebook resolves between them at the call site |
+| 3 | `ValueError: unknown arch: lraspp_mobilenetv3` | `engine.build_model` knows segformer/smp/yolo only; the efficient-architecture shim was never installed |
+
+**Why the preflight missed all three: it exercised the LOSS but not the setup
+around it.** It called `DistillLoss` with `segformer_alpha` directly instead of
+the way `train_run` does, never touched the batch pin, and only ever built
+`FAMILIES[0]`. A preflight that takes a shortcut around the code it is checking
+is not checking it.
+
+All three are fixed at the root rather than in the notebook —
+`register_specs()` registers Stage O's controls into `multiteacher.CONTROL_FOR`,
+`train_arms` resolves `alpha` per arm from `STUDENT_ARCH`, and `train_arms`
+installs the efficient shim when any family needs it. `preflight()` now builds
+the criterion exactly as `train_run` does and walks `control_batch` for every
+family it will pin.
+
+**The general lesson, and it is not new here:** a check that is cheaper than the
+thing it guards is only worth having if it runs the *same code path*. Stage F's
+teacher-calibration guard and §7f.7a's checkpoint-load guard were both added
+after the same class of miss.
+
 ### 7k.6 What the closed gate licenses
 
 **The per-image oracle gain is +0.0450.** Picking the best teacher per
@@ -3796,6 +3888,19 @@ stronger than the arm would have been.
 
 **The practical lever is teacher CHOICE, not teacher blending.** 0.044 against
 0.104 is a bigger fairness move than any blend produced, and it costs nothing.
+
+**Now confirmed by the run, not only by the gate (§7k.5b).** The trained arms
+gained nothing on accuracy, lost the one perfect miss record in the study, and
+were consistently worse on small bruises — and the per-group breakdown (§7k.5c)
+shows the two students disagreeing about which groups improved. The prediction
+and the measurement agree, which is the strongest form this finding can take at
+one seed.
+
+**Recommendation: close this line.** What it does *not* settle is whether a
+*better routing key* would work. The +0.0450 oracle gain says the teachers
+genuinely complement each other; this stage shows only that skin tone does not
+identify *when*. Lesion size, image quality and teacher agreement are candidate
+keys — and Stage M already tested the last of those (§7e).
 
 ### 7k.7 Where it lives, and the failure that would fake a result
 
@@ -4511,10 +4616,24 @@ Add `"MYTABLE"` to the `WANTED` list and `FILENAME` map in the D10 save cell.
    `best_seeds` to every family is the fix and is a table lookup, not a rerun.
 0b. **MedSAM2 untested** (§7j.6). A video model with a memory bank, not a
    version bump; it needs its own stage rather than a swap into Stage N4.
-0c. **The ITA-grouped multi-teacher arm is built and never trained** (§7k.4).
-   Deliberate — its gate is closed on both schemes and the closure is the
-   result. `run_stage_o.py --only train` refuses without `--force-train`. Do not
-   run it without writing down why.
+0c. **The ITA-grouped arm ran at ONE SEED only** (§7k.5b, 2026-08-13). The gate
+   closed and we trained anyway; the outcome agrees with the gate. But one seed
+   cannot separate "the method does nothing" from "this draw was unlucky", and
+   Stage Y seed 2 collapsed outright in this project. Report it as *a screen
+   that did not contradict the pre-test*, not as a measured null. Seeds 1 and 2
+   are +9 GPU-h and would settle it.
+0d. **Small-bruise numbers throughout rest on 19 photographs.** The smallest
+   decile is n = 19, so a 0.05 difference in that column is one or two images.
+   It is the endpoint that separates models most (0.47 to 0.86) and the one with
+   the least data behind it. Treat it as a signal to investigate, never as a
+   result on its own.
+0e. **The frozen-probe and fine-tuned foundation numbers use DIFFERENT heads.**
+   Frozen arms use `LinearProbeHead` — a single 1×1 conv, deliberately too weak
+   to paper over a bad encoder (`foundation.py`). Fine-tuned arms use the ~1 M
+   `ConvDecodeHead`. So *"fine-tuning improved DINOv2 from 0.688 to 0.831"* is
+   **not** a clean statement: the encoder unfroze *and* the head grew. Within
+   the frozen set the comparison is clean, because the head is identical there;
+   that is what makes ResNet-50's collapse to 0.102 meaningful.
 1. **nnU-Net** — never run on the canonical 697/134 split. No weights, no
    results. Needs `nnunetv2` and ~8 GPU-hours.
 2. **`x_dkd_b5_to_b0`** — a KD arm configured but never executed; the directory
@@ -5131,6 +5250,29 @@ BRUISE_UNIFIED/
 ├── bruise_inference_all.ipynb    §7l. Calls bruisekit.inference and adds NO
 │                                 scoring code; scripts/84b fails the build if
 │                                 it ever does.
+├── bruise_stage_o_train.ipynb    §7k.5b. Trains the ITA arm AGAINST the closed
+│                                 gate. Refuses to start without a gate file to
+│                                 override, and writes FORCED_GATE.json beside
+│                                 the runs. Cell 11 is the preflight -- run it
+│                                 and read it before flipping RUN_TRAINING.
+├── bruise_code_tour.ipynb        19 questions a supervisor asks, each answered
+│                                 by PRINTING the real source out of bruisekit/
+│                                 with clickable file:line headers. Nothing is
+│                                 reimplemented; show() re-reads the file every
+│                                 time, so it cannot go stale. Generated by
+│                                 scripts/89, which FAILS on a stale anchor.
+│
+│   ── documentation of the source itself ─────────────────────────────
+│   docs/CODE_MAP.md              47 anchors: where each piece of functionality
+│                                 lives, with line numbers RESOLVED AT BUILD
+│                                 TIME by scripts/88. Regenerate rather than
+│                                 patch — it fails if an anchor stops matching,
+│                                 because a stale pointer that lands in an
+│                                 unrelated function is worse than no pointer.
+│                                 Covers: head attachment, freezing, unfreezing,
+│                                 the four losses, the training loop, threshold
+│                                 selection, data, scoring, analysis, the gates,
+│                                 and the shim mechanism.
 ├── pyproject.toml                pip install -e .  (v2.0)
 ├── tests/                        pytest over every module's self_test() — 12
 │                                 checks, no GPU, no weights, no network
