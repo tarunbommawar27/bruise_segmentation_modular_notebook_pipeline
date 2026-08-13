@@ -207,3 +207,4 @@ BRUISE_UNIFIED/EXEC_STEPS.txt
 !scripts/86b_zip_stage_o_train.py
 # The code map is documentation of the source, not a slide deck.
 !scripts/88_generate_code_map.py
+!scripts/89_generate_code_tour_notebook.py
